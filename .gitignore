@@ -1,0 +1,22 @@
+# Build output
+build/
+out/
+*.o
+*.obj
+*.bpf.o
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Crash dumps
+core
+core.*

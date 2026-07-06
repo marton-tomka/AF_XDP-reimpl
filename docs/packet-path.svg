@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="915" viewBox="0 0 880 915" role="img" aria-label="Packet path: kernel UDP socket path versus this project's AF_XDP path">
+<defs>
+<marker id="ah_sl" markerWidth="9" markerHeight="9" refX="6.4" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/></marker>
+<marker id="ah_pk" markerWidth="9" markerHeight="9" refX="6.4" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#ec4899"/></marker>
+<marker id="ah_dk" markerWidth="9" markerHeight="9" refX="6.4" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#475569"/></marker>
+<linearGradient id="g_pk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdf2f8"/><stop offset="1" stop-color="#fce7f3"/></linearGradient>
+<linearGradient id="g_sl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8fafc"/><stop offset="1" stop-color="#eef2f7"/></linearGradient>
+<linearGradient id="g_dk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#334155"/><stop offset="1" stop-color="#1e293b"/></linearGradient>
+<linearGradient id="g_wh" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#fafafa"/></linearGradient>
+</defs>
+<rect x="8" y="8" width="864" height="899" rx="16" fill="url(#g_wh)" stroke="#e2e8f0" stroke-width="1.5"/>
+<rect x="387.0" y="26.0" width="127.9" height="20" rx="10.0" fill="#f1f5f9" stroke="#e2e8f0" stroke-width="1"/>
+<text x="397.0" y="39.7" font-size="11" fill="#64748b"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">packet on the wire</tspan></text>
+<rect x="371.8" y="60.0" width="158.5" height="37.0" rx="10" fill="url(#g_dk)" stroke="#0f172a" stroke-width="1.5"/>
+<text x="397.8" y="82.4" font-size="13" fill="#f8fafc"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="600">NIC — RX queue</tspan></text>
+<line x1="451.0" y1="97.0" x2="451.0" y2="127.0" stroke="#475569" stroke-width="1.8" stroke-linecap="round"/>
+<line x1="240.0" y1="127.0" x2="662.0" y2="127.0" stroke="#475569" stroke-width="1.8" stroke-linecap="round"/>
+<line x1="240.0" y1="127.0" x2="240.0" y2="167.0" stroke="#475569" stroke-width="1.8" stroke-linecap="round"/>
+<rect x="223.8" y="138.0" width="32.4" height="18" rx="9.0" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+<text x="231.8" y="150.4" font-size="10" fill="#64748b"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">DMA</tspan></text>
+<line x1="662.0" y1="127.0" x2="662.0" y2="167.0" stroke="#475569" stroke-width="1.8" stroke-linecap="round"/>
+<rect x="645.8" y="138.0" width="32.4" height="18" rx="9.0" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+<text x="653.8" y="150.4" font-size="10" fill="#64748b"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">DMA</tspan></text>
+<rect x="148.8" y="167.0" width="182.4" height="24" rx="12.0" fill="#94a3b8" stroke="#94a3b8" stroke-width="1"/>
+<text x="162.8" y="183.1" font-size="12" fill="#ffffff"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="600">Kernel UDP socket path</tspan></text>
+<rect x="574.3" y="167.0" width="175.4" height="24" rx="12.0" fill="#db2777" stroke="#db2777" stroke-width="1"/>
+<text x="588.3" y="183.1" font-size="12" fill="#ffffff"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="600">This project · AF_XDP</tspan></text>
+<line x1="240.0" y1="191.0" x2="240.0" y2="217.0" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<line x1="662.0" y1="191.0" x2="662.0" y2="217.0" stroke="#ec4899" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_pk)"/>
+<rect x="116.4" y="221.0" width="247.2" height="34.5" rx="10" fill="url(#g_sl)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="134.4" y="242.0" font-size="12.5" fill="#334155"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">NIC RX ring — kernel DMA buffer</tspan></text>
+<line x1="240.0" y1="255.5" x2="240.0" y2="281.5" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<rect x="153.9" y="285.5" width="172.2" height="34.5" rx="10" fill="url(#g_sl)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="171.9" y="306.5" font-size="12.5" fill="#334155"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">IRQ → softirq (NAPI)</tspan></text>
+<line x1="240.0" y1="320.0" x2="240.0" y2="346.0" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<rect x="162.8" y="350.0" width="154.4" height="34.5" rx="10" fill="url(#g_sl)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="180.8" y="371.0" font-size="12.5" fill="#334155"><tspan font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-weight="400">skb</tspan><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400"> alloc + parse</tspan></text>
+<line x1="240.0" y1="384.5" x2="240.0" y2="410.5" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<rect x="143.7" y="414.5" width="192.7" height="34.5" rx="10" fill="url(#g_sl)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="161.7" y="435.5" font-size="12.5" fill="#334155"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">IP layer: checks, route</tspan></text>
+<line x1="240.0" y1="449.0" x2="240.0" y2="475.0" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<rect x="147.1" y="479.0" width="185.9" height="34.5" rx="10" fill="url(#g_sl)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="165.1" y="500.0" font-size="12.5" fill="#334155"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">UDP layer: csum, demux</tspan></text>
+<line x1="240.0" y1="513.5" x2="240.0" y2="539.5" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<rect x="153.9" y="543.5" width="172.2" height="34.5" rx="10" fill="url(#g_sl)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="171.9" y="564.5" font-size="12.5" fill="#334155"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">socket receive queue</tspan></text>
+<line x1="240.0" y1="578.0" x2="240.0" y2="604.0" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<rect x="177.7" y="608.0" width="124.6" height="34.5" rx="10" fill="url(#g_sl)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="195.7" y="629.0" font-size="12.5" fill="#334155"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">process woken</tspan></text>
+<line x1="240.0" y1="642.5" x2="240.0" y2="668.5" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<rect x="149.5" y="672.5" width="181.0" height="34.5" rx="10" fill="url(#g_sl)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="167.5" y="693.5" font-size="12.5" fill="#334155"><tspan font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-weight="400">recvfrom()</tspan><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400"> — syscall</tspan></text>
+<line x1="240.0" y1="707.0" x2="240.0" y2="733.0" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<rect x="157.3" y="737.0" width="165.4" height="34.5" rx="10" fill="url(#g_sl)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="175.3" y="758.0" font-size="12.5" fill="#334155"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">copy: kernel → user</tspan></text>
+<rect x="599.7" y="221.0" width="124.6" height="51.5" rx="10" fill="url(#g_pk)" stroke="#db2777" stroke-width="1.5"/>
+<text x="627.9" y="242.0" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">NIC → UMEM</tspan></text>
+<text x="617.7" y="259.0" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">zero-copy DMA</tspan></text>
+<line x1="662.0" y1="272.5" x2="662.0" y2="296.5" stroke="#ec4899" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_pk)"/>
+<rect x="558.8" y="300.5" width="206.3" height="68.5" rx="10" fill="url(#g_pk)" stroke="#db2777" stroke-width="1.5"/>
+<text x="593.8" y="321.5" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="600">XDP: </tspan><tspan font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-weight="400">xdp_filter_ip</tspan></text>
+<text x="576.8" y="338.5" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">Ethernet → ≤2 VLAN → IPv4</tspan></text>
+<text x="593.9" y="355.5" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">source IP == target?</tspan></text>
+<line x1="662.0" y1="369.0" x2="662.0" y2="395.0" stroke="#ec4899" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_pk)"/>
+<polygon points="662,399.0 724.0,430.0 662,461.0 600.0,430.0" fill="#ffffff" stroke="#db2777" stroke-width="1.5"/>
+<text x="640.1" y="434.3" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="600">match?</tspan></text>
+<path d="M 600.0,430.0 L 390.0,430.0 Q 380.0,430.0 380.0,420.0 L 380.0,377.2 Q 380.0,367.2 370.0,367.2 L 323.2,367.2" fill="none" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_sl)"/>
+<rect x="455.2" y="400.5" width="69.7" height="19" rx="9.5" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+<text x="464.2" y="413.6" font-size="10.5" fill="#64748b"><tspan font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-weight="400">XDP_PASS</tspan></text>
+<line x1="662.0" y1="461.0" x2="662.0" y2="499.0" stroke="#ec4899" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_pk)"/>
+<rect x="614.3" y="470.5" width="95.5" height="19" rx="9.5" fill="#ffffff" stroke="#db2777" stroke-width="1"/>
+<text x="623.3" y="483.6" font-size="10.5" fill="#9d174d"><tspan font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-weight="400">XDP_REDIRECT</tspan></text>
+<rect x="541.5" y="503.0" width="240.9" height="51.5" rx="10" fill="url(#g_pk)" stroke="#db2777" stroke-width="1.5"/>
+<text x="559.5" y="524.0" font-size="12.5" fill="#9d174d"><tspan font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-weight="400">bpf_redirect_map</tspan><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400"> → </tspan><tspan font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-weight="400">xsks_map</tspan></text>
+<text x="570.0" y="541.0" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">descriptor → socket RX ring</tspan></text>
+<line x1="662.0" y1="554.5" x2="662.0" y2="592.5" stroke="#ec4899" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_pk)"/>
+<rect x="635.8" y="564.0" width="52.3" height="19" rx="9.5" fill="#ffffff" stroke="#db2777" stroke-width="1"/>
+<text x="644.8" y="577.1" font-size="10.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">no IRQ</tspan></text>
+<rect x="540.3" y="596.5" width="243.4" height="51.5" rx="10" fill="url(#g_pk)" stroke="#db2777" stroke-width="1.5"/>
+<text x="597.3" y="617.5" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">busy-poll RX thread</tspan></text>
+<text x="558.3" y="634.5" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">pinned · </tspan><tspan font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-weight="400">SO_PREFER_BUSY_POLL</tspan></text>
+<line x1="662.0" y1="648.0" x2="662.0" y2="686.0" stroke="#ec4899" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_pk)"/>
+<rect x="595.8" y="657.5" width="132.4" height="19" rx="9.5" fill="#ffffff" stroke="#db2777" stroke-width="1"/>
+<text x="604.8" y="670.6" font-size="10.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">no syscall · no copy</tspan></text>
+<rect x="568.1" y="690.0" width="187.8" height="51.5" rx="10" fill="url(#g_pk)" stroke="#db2777" stroke-width="1.5"/>
+<text x="586.1" y="711.0" font-size="12.5" fill="#9d174d"><tspan font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace" font-weight="400">PacketView</tspan><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400"> → callback</tspan></text>
+<text x="610.9" y="728.0" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">raw frame bytes</tspan></text>
+<line x1="662.0" y1="741.5" x2="662.0" y2="765.5" stroke="#ec4899" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ah_pk)"/>
+<rect x="582.7" y="769.5" width="158.6" height="51.5" rx="10" fill="url(#g_pk)" stroke="#db2777" stroke-width="1.5"/>
+<text x="604.1" y="790.5" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">frame → allocator</tspan></text>
+<text x="600.7" y="807.5" font-size="12.5" fill="#9d174d"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="400">Fill ring refilled</tspan></text>
+<text x="371.1" y="859.0" font-size="10.5" fill="#64748b"><tspan font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-weight="600">REMOVED FROM THE FAST PATH</tspan></text>
+<rect x="145.2" y="869.0" width="86.7" height="20" rx="10.0" fill="#fff1f2" stroke="#fecdd3" stroke-width="1"/>
+<text x="154.2" y="882.6" font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" fill="#9f1239" text-decoration="line-through">hardware IRQ</text>
+<rect x="239.9" y="869.0" width="69.5" height="20" rx="10.0" fill="#fff1f2" stroke="#fecdd3" stroke-width="1"/>
+<text x="248.9" y="882.6" font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" fill="#9f1239" text-decoration="line-through">skb alloc</text>
+<rect x="317.4" y="869.0" width="86.7" height="20" rx="10.0" fill="#fff1f2" stroke="#fecdd3" stroke-width="1"/>
+<text x="326.4" y="882.6" font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" fill="#9f1239" text-decoration="line-through">IP/UDP stack</text>
+<rect x="412.1" y="869.0" width="86.7" height="20" rx="10.0" fill="#fff1f2" stroke="#fecdd3" stroke-width="1"/>
+<text x="421.1" y="882.6" font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" fill="#9f1239" text-decoration="line-through">socket queue</text>
+<rect x="506.8" y="869.0" width="121.0" height="20" rx="10.0" fill="#fff1f2" stroke="#fecdd3" stroke-width="1"/>
+<text x="515.8" y="882.6" font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" fill="#9f1239" text-decoration="line-through">recvfrom() syscall</text>
+<rect x="635.8" y="869.0" width="121.0" height="20" rx="10.0" fill="#fff1f2" stroke="#fecdd3" stroke-width="1"/>
+<text x="644.8" y="882.6" font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="10.5" fill="#9f1239" text-decoration="line-through">kernel → user copy</text>
+</svg>
