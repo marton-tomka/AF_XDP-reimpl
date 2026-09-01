@@ -184,6 +184,11 @@ inline expect<Xsk> Xsk::create(const XskConfig& cfg, Umem& umem) {
             log(LogLevel::Info, "ZEROCOPY");
             bound = true;
         } else {
+            const int zc_errno = errno;
+            log(LogLevel::Warn,
+                std::format("XDP_ZEROCOPY bind failed: {} (errno={}) — falling back to copy mode",
+                            std::strerror(zc_errno),
+                            zc_errno));
             sxdp.sxdp_flags &= ~static_cast<std::uint16_t>(XDP_ZEROCOPY);
         }
     }

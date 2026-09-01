@@ -73,7 +73,6 @@ public:
             set_realtime();
         }
 
-        stats_ = {};
         while (!st.stop_requested()) {
             const std::uint32_t processed = poll_rx();
             if (processed == 0) {
@@ -81,7 +80,8 @@ public:
                     __builtin_ia32_pause();
                 }
             } else {
-                stats_.packets_received += processed;
+                std::atomic_ref<std::uint64_t>(stats_.packets_received)
+                    .fetch_add(processed, std::memory_order_relaxed);
             }
         }
     }
@@ -120,7 +120,10 @@ private:
 
         if (xsk_.fill().available() < fill_threshold_) {
             const std::uint32_t pushed = xsk_.refill_fill(alloc_);
-            stats_.fill_refills += (pushed > 0 ? 1 : 0);
+            if (pushed > 0) {
+                std::atomic_ref<std::uint64_t>(stats_.fill_refills)
+                    .fetch_add(1, std::memory_order_relaxed);
+            }
         }
 
         // if busy polling, the transmitter side never wakes under heavy load, make sure it does

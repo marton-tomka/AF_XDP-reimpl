@@ -7,6 +7,7 @@
 #include "frame_alloc.hpp"
 #include "umem.hpp"
 #include "xsk.hpp"
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -49,7 +50,7 @@ public:
 
     [[nodiscard]] bool send(std::span<const std::byte> payload) noexcept {
         if (payload.size() > frame_size_) [[unlikely]] {
-            ++stats_.drops;
+            std::atomic_ref<std::uint64_t>(stats_.drops).fetch_add(1, std::memory_order_relaxed);
             return false;
         }
 
@@ -63,7 +64,7 @@ public:
         if (tx_used_ == tx_avail_) [[unlikely]] {
             tx_avail_ = xsk_.tx().reserve(xsk_.tx().capacity()).amount;
             if (tx_used_ == tx_avail_) {
-                ++stats_.drops;
+                std::atomic_ref<std::uint64_t>(stats_.drops).fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
         }
@@ -73,7 +74,7 @@ public:
             reap_completions();
             frame = alloc_.alloc();
             if (!frame) {
-                ++stats_.drops;
+                std::atomic_ref<std::uint64_t>(stats_.drops).fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
         }
@@ -90,7 +91,8 @@ public:
         if (tx_used_ > 0) {
             xsk_.tx().advance_producer(tx_used_);
             xsk_.kick_tx();
-            stats_.packets_sent += tx_used_;
+            std::atomic_ref<std::uint64_t>(stats_.packets_sent)
+                .fetch_add(tx_used_, std::memory_order_relaxed);
         }
         tx_used_ = 0;
         reserved_ = false;

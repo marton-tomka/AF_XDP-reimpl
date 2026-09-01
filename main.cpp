@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Marton Tomka
 
+#include "bench.hpp"
 #include "common.hpp"
 #include "frame_alloc.hpp"
 #include "receiver.hpp"
@@ -10,6 +11,7 @@
 #include "xsk.hpp"
 #include <arpa/inet.h>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -166,12 +168,23 @@ int main(int argc, char* argv[]) {
     };
     BenchStats bench{};
 
-    auto strategy = [&tx, &bench](const afxdp::PacketView& pkt) noexcept {
+    // Latency histogram: one heap allocation here, none on the hot path.
+    const double ns_per_tick = afxdp::bench::calibrate_ns_per_tick();
+    afxdp::bench::Samples samples(1u << 22); // ~4.2M samples, 16 MB
+
+    auto strategy = [&tx, &bench, &samples](const afxdp::PacketView& pkt) noexcept {
+        const auto t0 = afxdp::bench::rdtsc();
+        // The UMEM is PROT_READ|PROT_WRITE, so the const on PacketView::data is a
+        // courtesy, not a real const object — casting it away to rewrite in place is
+        // defined here. Makes the echo a valid IPv4/UDP reply; see bench.hpp.
+        std::span<std::byte> frame(const_cast<std::byte*>(pkt.data.data()), pkt.data.size());
+        (void)afxdp::bench::reflect_swap(frame); // best-effort; non-IPv4/UDP echoed as-is
         bench.packets++;
         bench.bytes += pkt.data.size();
         if (tx.send(pkt.data)) {
             ++bench.echoed;
         }
+        samples.record(afxdp::bench::rdtsc() - t0);
     };
 
     auto flush_tx = [&tx]() noexcept { tx.flush(); };
@@ -186,6 +199,14 @@ int main(int argc, char* argv[]) {
     {
         std::jthread poll_thread([&receiver](std::stop_token st) { receiver.run(std::move(st)); });
 
+        // The engine counters are written by the poll thread; read them through
+        // std::atomic_ref (relaxed) so the cross-thread read is race-free. bench_*
+        // stays a plain liveness readout, not a published metric.
+        auto load = [](const std::uint64_t& v) noexcept {
+            return std::atomic_ref<std::uint64_t>(const_cast<std::uint64_t&>(v))
+                .load(std::memory_order_relaxed);
+        };
+
         using Clock = std::chrono::steady_clock;
         auto last_report = Clock::now();
         std::uint64_t last_drops = 0;
@@ -197,34 +218,38 @@ int main(int argc, char* argv[]) {
             const auto elapsed_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - last_report).count();
 
-            // technically ub, but on x86-64 worst case is you read 1s old data
             const auto& rstats = receiver.stats();
             const auto& tstats = tx.stats();
+            const std::uint64_t drops = load(tstats.drops);
             std::println("[stats] Δt={}ms | rx={} | fill_refills={} | tx={} | tx_drops={} | "
                          "bench_pkts={} | bench_bytes={} | bench_echoed={}",
                          elapsed_ms,
-                         rstats.packets_received,
-                         rstats.fill_refills,
-                         tstats.packets_sent,
-                         tstats.drops,
+                         load(rstats.packets_received),
+                         load(rstats.fill_refills),
+                         load(tstats.packets_sent),
+                         drops,
                          bench.packets,
                          bench.bytes,
                          bench.echoed);
 
-            const std::uint64_t drops_in_window = tstats.drops - last_drops;
+            const std::uint64_t drops_in_window = drops - last_drops;
             if (drops_in_window > DROP_ANOMALY) {
                 std::println(stderr,
                              "[control] drop anomaly ({} in last window) — shutting down",
                              drops_in_window);
                 g_stop = 1;
             }
-            last_drops = tstats.drops;
+            last_drops = drops;
             last_report = now;
         }
 
         std::println("[main] Stopping...");
         poll_thread.request_stop();
     }
+
+    // Poll thread has joined (jthread destructor above), so plain reads are safe.
+    samples.report(ns_per_tick, "service");
+    samples.dump_csv("service_ns.csv", ns_per_tick);
 
     std::println("[main] Done. rx={} tx={} drops={}",
                  receiver.stats().packets_received,
