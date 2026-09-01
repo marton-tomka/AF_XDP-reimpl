@@ -20,15 +20,11 @@
 
 namespace afxdp::bench {
 
-// rdtscp waits for prior instructions to retire; cheaper than lfence+rdtsc+lfence
-// and accurate enough at microsecond scale.
 [[nodiscard]] inline std::uint64_t rdtsc() noexcept {
     unsigned aux;
     return __rdtscp(&aux);
 }
 
-// TSC ticks -> nanoseconds, calibrated once against CLOCK_MONOTONIC.
-// Only valid if the CPU has constant_tsc + nonstop_tsc; check /proc/cpuinfo.
 [[nodiscard]] inline double calibrate_ns_per_tick(long settle_ms = 200) noexcept {
     timespec t0{}, t1{};
     ::clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -43,9 +39,6 @@ namespace afxdp::bench {
     return ns / static_cast<double>(c1 - c0);
 }
 
-// Fixed-capacity latency sample buffer. One heap allocation at construction,
-// none on the hot path. Single-writer: the poll thread records, the main thread
-// reports only after that thread has joined, so no synchronization is needed.
 class Samples {
 public:
     explicit Samples(std::size_t capacity)
@@ -53,10 +46,6 @@ public:
         , cap_(capacity) {}
 
     void record(std::uint64_t ticks) noexcept {
-        // uint32_t halves the buffer's memory. A per-packet service time never
-        // approaches 2^32 ticks (~1.4 s at 3 GHz); a scheduler stall that long
-        // would wrap to a small bogus value, which shows up as a lone low outlier,
-        // not a corrupted percentile. Widen to uint64_t if you don't want even that.
         if (n_ < cap_) [[likely]] {
             buf_[n_++] = static_cast<std::uint32_t>(ticks);
         } else {
@@ -64,7 +53,6 @@ public:
         }
     }
 
-    // Call at shutdown only — this sorts the buffer in place.
     void report(double ns_per_tick, const char* label) noexcept {
         if (n_ == 0) {
             std::println("[{}] no samples", label);
@@ -77,11 +65,16 @@ public:
         };
         std::println("[{}] n={} dropped={} | p50={:.0f}ns p90={:.0f}ns p99={:.0f}ns "
                      "p99.9={:.0f}ns max={:.0f}ns",
-                     label, n_, dropped_, pct(0.50), pct(0.90), pct(0.99), pct(0.999),
+                     label,
+                     n_,
+                     dropped_,
+                     pct(0.50),
+                     pct(0.90),
+                     pct(0.99),
+                     pct(0.999),
                      static_cast<double>(buf_[n_ - 1]) * ns_per_tick);
     }
 
-    // Raw dump for offline plotting. Call after report() — buffer is sorted by then.
     void dump_csv(const char* path, double ns_per_tick) const noexcept {
         std::FILE* f = std::fopen(path, "w");
         if (!f) return;
@@ -101,10 +94,6 @@ private:
     std::uint64_t dropped_ = 0;
 };
 
-// Swap L2/L3/L4 endpoints in place so a reflected frame is a valid reply.
-// Returns false (frame left untouched past the point of failure) if this isn't a
-// plain untagged IPv4/UDP frame — the XDP filter also accepts VLAN-tagged IPv4,
-// which this does not yet rewrite; extend it to skip tags if you benchmark those.
 [[nodiscard]] inline bool reflect_swap(std::span<std::byte> f) noexcept {
     if (f.size() < sizeof(ethhdr) + sizeof(iphdr)) return false;
 
@@ -118,8 +107,6 @@ private:
     auto* ip = reinterpret_cast<iphdr*>(f.data() + sizeof(ethhdr));
     if (ip->version != 4) return false;
     std::swap(ip->saddr, ip->daddr);
-    // The IPv4 header checksum is a one's-complement sum over 16-bit words;
-    // swapping two of those words leaves the sum unchanged, so it stays valid.
 
     const std::size_t ihl = static_cast<std::size_t>(ip->ihl) * 4;
     if (ip->protocol == IPPROTO_UDP && f.size() >= sizeof(ethhdr) + ihl + sizeof(udphdr)) {
