@@ -68,3 +68,9 @@ Needs Linux ≥ 5.11 (≥ 5.14 for zero-copy on Intel igc / I225/I226), GCC ≥ 
 ## License
 
 MIT, except `xdp_prog_bpf.c`, which is GPL-2.0-only (required by the BPF helpers it uses). Full text in [`LICENSE`](LICENSE).
+
+## Note on AI usage
+
+Everything that has to do with benchmarking (that is: bench.hpp, and parts of main with extensive commenting [strategy and load lambdas]) were entirely written by fable 5, as I do not yet have the hardware to test and benchmark this extensively down to the nanos, when the time comes I'll work through it myself though. :D
+
+Also the .md-s and most of the readme were of course written by AI.
