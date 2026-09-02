@@ -107,7 +107,7 @@ inline expect<Umem> Umem::create(const UmemConfig& cfg) {
         log(LogLevel::Info, "UMEM allocated with standard 4KB pages (huge pages disabled)");
     }
 
-    // technically redundant(?), the kernel should pin pages anyway
+    // the kernel should pin pages anyway, but this way we have fail-fast error
     if (::mlock(base, total) != 0) {
         ::munmap(base, total);
         return UNexpected(make_errno_error("mlock(umem)"));

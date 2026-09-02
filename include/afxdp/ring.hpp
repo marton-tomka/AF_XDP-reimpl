@@ -170,7 +170,6 @@ inline expect<MmapRing<DescT>> MmapRing<DescT>::create(int fd,
         return UNexpected(make_errno_error("mmap ring"));
     }
 
-    // could've used std::byte* too but uint_8t is simpler
     auto* b = static_cast<std::uint8_t*>(base);
 
     MmapRing<DescT> ring;

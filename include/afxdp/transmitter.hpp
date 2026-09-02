@@ -61,10 +61,12 @@ public:
             tx_used_ = 0;
             reserved_ = true;
         }
+
         if (tx_used_ == tx_avail_) [[unlikely]] {
             tx_avail_ = xsk_.tx().reserve(xsk_.tx().capacity()).amount;
             if (tx_used_ == tx_avail_) {
-                std::atomic_ref<std::uint64_t>(stats_.drops).fetch_add(1, std::memory_order_relaxed);
+                std::atomic_ref<std::uint64_t>(stats_.drops)
+                    .fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
         }
@@ -74,7 +76,8 @@ public:
             reap_completions();
             frame = alloc_.alloc();
             if (!frame) {
-                std::atomic_ref<std::uint64_t>(stats_.drops).fetch_add(1, std::memory_order_relaxed);
+                std::atomic_ref<std::uint64_t>(stats_.drops)
+                    .fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
         }

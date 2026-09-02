@@ -126,7 +126,7 @@ private:
             }
         }
 
-        // if busy polling, the transmitter side never wakes under heavy load, make sure it does
+        // if busy polling, the transmitter side would never wake under heavy load
         commit_tx_();
 
         return n;
