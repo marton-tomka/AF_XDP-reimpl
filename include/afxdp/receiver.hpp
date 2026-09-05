@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cassert>
 #include <cerrno>
+#include <concepts>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -17,19 +18,26 @@
 #include <span>
 #include <stop_token>
 #include <sys/socket.h>
+#include <type_traits>
 
 namespace afxdp {
 
 struct PacketView {
-    std::span<const std::byte> data;
+    std::span<std::byte> data;
+    std::uint64_t addr;
 
     template<typename T>
-    [[nodiscard]] const T* as() const noexcept {
+    [[nodiscard]] T* as() const noexcept {
         if (data.size_bytes() < sizeof(T)) return nullptr;
         assert(reinterpret_cast<std::uintptr_t>(data.data()) % alignof(T) == 0 &&
                "PacketView::as<T>() on misaligned storage");
-        return reinterpret_cast<const T*>(data.data());
+        return reinterpret_cast<T*>(data.data());
     }
+};
+
+enum class FrameDisposition : std::uint8_t {
+    Recycle,
+    Transferred,
 };
 
 struct ReceiverConfig {
@@ -40,8 +48,9 @@ struct ReceiverConfig {
 };
 
 template<std::size_t CAPACITY, typename Callback, typename CommitTX>
-    requires PowerOfTwo<CAPACITY> && std::invocable<Callback, const PacketView&> &&
-             std::invocable<CommitTX>
+    requires PowerOfTwo<CAPACITY> && std::invocable<Callback&, PacketView&> &&
+             std::same_as<std::invoke_result_t<Callback&, PacketView&>, FrameDisposition> &&
+             std::invocable<CommitTX&>
 class Receiver {
 public:
     Receiver(Xsk& xsk,
@@ -107,16 +116,18 @@ private:
         for (std::uint32_t i{}; i < n; ++i) [[likely]] {
             const xdp_desc& desc = xsk_.rx().desc_at(start + i);
 
-            const PacketView pv{
-                .data = std::span<const std::byte>(
-                    static_cast<const std::byte*>(umem_base_) + desc.addr, desc.len)};
+            PacketView pv{.data = std::span<std::byte>(
+                              static_cast<std::byte*>(umem_base_) + desc.addr, desc.len),
+                          .addr = desc.addr};
 
-            callback_(pv);
-
-            alloc_.free(desc.addr & frame_mask_);
+            if (callback_(pv) == FrameDisposition::Recycle) {
+                alloc_.free(desc.addr & frame_mask_);
+            }
         }
 
         xsk_.rx().advance_consumer(n);
+
+        commit_tx_();
 
         if (xsk_.fill().available() < fill_threshold_) {
             const std::uint32_t pushed = xsk_.refill_fill(alloc_);
@@ -125,9 +136,6 @@ private:
                     .fetch_add(1, std::memory_order_relaxed);
             }
         }
-
-        // if busy polling, the transmitter side would never wake under heavy load
-        commit_tx_();
 
         return n;
     }

@@ -174,17 +174,17 @@ int main(int argc, char* argv[]) {
 
     auto strategy = [&tx, &bench, &samples](const afxdp::PacketView& pkt) noexcept {
         const auto t0 = afxdp::bench::rdtsc();
-        // The UMEM is PROT_READ|PROT_WRITE, so the const on PacketView::data is a
-        // courtesy, not a real const object — casting it away to rewrite in place is
-        // defined here. Makes the echo a valid IPv4/UDP reply; see bench.hpp.
-        std::span<std::byte> frame(const_cast<std::byte*>(pkt.data.data()), pkt.data.size());
-        (void)afxdp::bench::reflect_swap(frame); // best-effort; non-IPv4/UDP echoed as-is
+        (void)afxdp::bench::reflect_swap(pkt.data);
         bench.packets++;
         bench.bytes += pkt.data.size();
-        if (tx.send(pkt.data)) {
+        const bool transferred = tx.send_in_place(pkt.addr,
+                                                  static_cast<std::uint32_t>(pkt.data.size()));
+        if (transferred) {
             ++bench.echoed;
         }
         samples.record(afxdp::bench::rdtsc() - t0);
+        return transferred ? afxdp::FrameDisposition::Transferred
+                           : afxdp::FrameDisposition::Recycle;
     };
 
     auto flush_tx = [&tx]() noexcept { tx.flush(); };

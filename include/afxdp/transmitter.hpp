@@ -10,10 +10,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
-#include <cstring>
 #include <linux/if_xdp.h>
-#include <optional>
-#include <span>
 
 namespace afxdp {
 
@@ -24,8 +21,8 @@ public:
     Transmitter(Xsk& xsk, FrameAllocator<CAPACITY>& alloc, Umem& umem)
         : xsk_(xsk)
         , alloc_(alloc)
-        , umem_base_(umem.base_ptr())
-        , frame_size_(umem.config().frame_size) {
+        , frame_size_(umem.config().frame_size)
+        , frame_mask_(~(static_cast<std::uint64_t>(frame_size_) - 1)) {
         assert(frame_size_ != 0 && (frame_size_ & (frame_size_ - 1)) == 0 &&
                "UMEM frame_size must be a power of two (AF_XDP aligned mode)");
     }
@@ -40,7 +37,7 @@ public:
         }
 
         for (std::uint32_t i{}; i < n; ++i) [[likely]] {
-            alloc_.free(xsk_.completion().desc_at(start + i));
+            alloc_.free(xsk_.completion().desc_at(start + i) & frame_mask_);
         }
 
         xsk_.completion().advance_consumer(n);
@@ -48,8 +45,8 @@ public:
         return n;
     }
 
-    [[nodiscard]] bool send(std::span<const std::byte> payload) noexcept {
-        if (payload.size() > frame_size_) [[unlikely]] {
+    [[nodiscard]] bool send_in_place(std::uint64_t addr, std::uint32_t length) noexcept {
+        if (length == 0 || length > frame_size_) [[unlikely]] {
             std::atomic_ref<std::uint64_t>(stats_.drops).fetch_add(1, std::memory_order_relaxed);
             return false;
         }
@@ -71,21 +68,8 @@ public:
             }
         }
 
-        std::optional<std::uint64_t> frame = alloc_.alloc();
-        if (!frame) [[unlikely]] {
-            reap_completions();
-            frame = alloc_.alloc();
-            if (!frame) {
-                std::atomic_ref<std::uint64_t>(stats_.drops)
-                    .fetch_add(1, std::memory_order_relaxed);
-                return false;
-            }
-        }
-
-        const std::uint64_t addr = *frame;
-        std::memcpy(static_cast<std::byte*>(umem_base_) + addr, payload.data(), payload.size());
-        xsk_.tx().desc_at(tx_start_ + tx_used_) =
-            xdp_desc{.addr = addr, .len = static_cast<std::uint32_t>(payload.size()), .options = 0};
+        xsk_.tx().desc_at(tx_start_ +
+                          tx_used_) = xdp_desc{.addr = addr, .len = length, .options = 0};
         ++tx_used_;
         return true;
     }
@@ -113,8 +97,8 @@ public:
 private:
     Xsk& xsk_;
     FrameAllocator<CAPACITY>& alloc_;
-    void* const umem_base_;
     std::uint32_t frame_size_;
+    std::uint64_t frame_mask_;
 
     std::uint32_t tx_start_ = 0;
     std::uint32_t tx_avail_ = 0;
