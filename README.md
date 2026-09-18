@@ -1,6 +1,6 @@
 # afxdp_receiver
 
-Kernel-bypass packet I/O on Linux: an AF_XDP receive/transmit engine in C++23, with an eBPF/XDP program steering selected traffic from the NIC directly into userspace memory, removing up to 2 context switches, a copy, and a ton of latency.
+Kernel-bypass packet I/O on Linux: an AF_XDP receive/transmit engine in C++23, with an eBPF/XDP program steering selected traffic from the NIC directly into userspace memory, possibly removing context switches, a copy, and a ton of latency.
 
 The point of the project is the latency toolbox: kernel bypass, zero-copy DMA buffers, lock-free SPSC rings, busy-polling instead of interrupts, huge pages, CPU pinning, and no heap allocation on the hot path.
 
@@ -27,11 +27,11 @@ Error handling is `std::expected` end to end; there are no exceptions.
 
 ## Current scope
 
-Single RX queue, single socket, IPv4-only filtering. The receive callback gets raw Ethernet frames, and there is no userspace protocol stack built on top. The bundled callback is a reflector benchmark: it counts packets/bytes and echoes each matched frame back out the TX ring, with counters (`bench_pkts`, `bench_bytes`, `bench_echoed`) reported on the once-a-second stats line. There is also no timestamping as of v1, which limits benchmarkability for now.
+Single RX queue, single socket, IPv4-only filtering. The receive callback gets raw Ethernet frames, and there is no userspace protocol stack built on top. The bundled callback is a reflector benchmark: it counts packets/bytes and echoes each matched frame back out the TX ring, with counters (`bench_pkts`, `bench_bytes`, `bench_echoed`) reported on the once-a-second stats line. No end-to-end packet-latency measurement as of the current version.
 
 ## Performance
 
-Not yet measured; functionality confirmed via veth.
+Not yet measured in a proper test environment; functionality confirmed via veth (COPY mode only).
 
 ## Build & run
 
@@ -52,4 +52,4 @@ Everything that has to do with benchmarking (that is: bench.hpp, and parts of ma
 
 Also the .md-s and most of the readme were of course written by AI, along with the C code (xdp_prog_bfc.c).
 
-Nontheless the entirity of the infrastructure and all logical elements - that is: the 8 implementation headers and main.cpp - are custom designed and built by me.
+Nontheless the entirity of the infrastructure and all logical elements - that is: 8 implementation headers and main.cpp - are custom designed and built by me.
