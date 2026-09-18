@@ -33,29 +33,6 @@ Single RX queue, single socket, IPv4-only filtering. The receive callback gets r
 
 Not yet measured; functionality confirmed via veth.
 
-| Metric | Status | 2.5GbE expected* | 10GbE expected* |
-|---|---|---|---|
-| Median processing latency vs. kernel UDP socket | ***pending..*** | around 10-14µs for XDP (~25µs reduction) | ~6-9µs |
-| p99 round-trip latency under sustained load | ***pending..*** | <~35µs (expect 20-40, given igc not latency-tuned) | ~15-30µs |
-| Sustained throughput (packets/sec) | ***pending..*** | 3.0-3.7M pps (link limited) | ~5-8M pps (CPU bound) |
-
-*the expected numbers are estimates based on papers (see below) contrasted with this project's actual codebase and the veth test.
-
-#### References
-
-Latency estimates are projected from:
-
-- K. Castillon du Perron et al., "Understanding Delays in AF_XDP-based Applications," arXiv:2402.10513, 2024. <https://arxiv.org/abs/2402.10513>
-- M. Majkowski (Cloudflare), "How to achieve low latency with 10Gbps Ethernet," 2015. <https://blog.cloudflare.com/how-to-achieve-low-latency/>
-
-Throughput estimates are projected from:
-
-- B. Töpel, M. Karlsson, "AF_XDP: introducing zero-copy support," LWN.net, 2018. <https://lwn.net/Articles/756549/>
-
-Datapath-mode / zero-copy availability:
-
-- "AF_XDP," Linux kernel documentation. <https://docs.kernel.org/networking/af_xdp.html>
-
 ## Build & run
 
 ```bash
