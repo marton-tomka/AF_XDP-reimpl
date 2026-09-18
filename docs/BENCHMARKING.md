@@ -244,32 +244,17 @@ This is the single strategy for Phase 0.2 **and** 0.3 combined — use this one,
 
 > **Known caveat to disclose in results.** `Transmitter::send()` memcpy's into a freshly allocated frame. A true zero-copy reflector re-submits the *RX frame's own address* to the TX ring and lets the completion ring recycle it (the `xdpsock` l2fwd pattern). Your reflect path therefore carries one copy plus an alloc/free pair that a ZC forwarder does not. Either fix it or state it — do not report reflect throughput as a zero-copy number without the asterisk.
 
-### 0.4 Fix the stats race — but not the way that breaks the build
+### 0.4 Race-free reporting
 
-[`main.cpp`](../main.cpp) reads counters written by the poll thread with no synchronisation, and the comment admits "technically ub". For a liveness readout it genuinely is fine — aligned 64-bit loads don't tear on x86-64. But two of these counters (`rx` → pps, `tx_drops`) feed numbers you're about to publish, so make the reads well-defined.
+[`receiver.hpp`](../include/afxdp/receiver.hpp) and [`transmitter.hpp`](../include/afxdp/transmitter.hpp) keep their counters in private `std::atomic<std::uint64_t>` members, including TX completions. `stats()` loads each counter with relaxed ordering and returns a plain `Stats` value that can be copied and formatted safely. It never exposes the storage being updated by the poll thread.
 
-**Do not** make the `Stats` members `std::atomic<std::uint64_t>` — that's the obvious move and it breaks the build in two places:
+The `bench_*` counters in [`main.cpp`](../main.cpp) also use atomic storage and explicit relaxed loads in the reporter. Only the poll thread updates them, so relaxed load/store pairs suffice for increments without adding locked read-modify-write instructions to each packet's benchmark work.
 
-- [`receiver.hpp`](../include/afxdp/receiver.hpp) resets with `stats_ = {};` at the top of `run()`. Atomic members are not copy-assignable, so that line stops compiling.
-- [`main.cpp`](../main.cpp) passes `rstats.packets_received` straight to `std::println`. There's no `std::formatter` for `std::atomic`, and format arguments are captured by reference, so the implicit `.load()` never happens — every stats print fails to compile.
+Each counter is race-free, but a group of counter loads is not a coherent point-in-time snapshot. Relaxed ordering suffices because the counters do not publish any other data. Plain concurrent reads or writes are not permitted, even for liveness metrics.
 
-The idiomatic fix in this codebase is `std::atomic_ref` over the existing plain `std::uint64_t` members — exactly how [`ring.hpp`](../include/afxdp/ring.hpp) already treats the kernel-shared head/tail words. Members stay plain, `stats_ = {}` keeps working, and the reporter reads them explicitly:
+The stop flag is a lock-free `std::atomic<bool>`, with a compile-time lock-free check: the signal handler may execute on either thread, and [signal handlers permit plain lock-free atomic operations](https://eel.is/c++draft/support.signal).
 
-```cpp
-// hot path (poll thread), receiver.hpp / transmitter.hpp — relaxed is enough,
-// these counters have no ordering relationship with anything else:
-std::atomic_ref<std::uint64_t>(stats_.packets_received)
-    .store(stats_.packets_received + processed, std::memory_order_relaxed);
-
-// reporter (main.cpp), once a second:
-const std::uint64_t rx =
-    std::atomic_ref<std::uint64_t>(const_cast<std::uint64_t&>(rstats.packets_received))
-        .load(std::memory_order_relaxed);
-```
-
-Relaxed atomics are the same `mov` on x86-64, so the cost really is zero — the point is only to make the data race defined. The `const_cast` at the read site is needed because `stats()` returns `const Stats&`; if that reads badly, add a non-const `stats_mut()` accessor for the reporter, or hoist the reads into the receiver/transmitter behind a small `snapshot()` method.
-
-The percentile data in `samples` needs none of this — it has a single writer (the poll thread) and is read only after the thread joins, so there's no race to fix there.
+The percentile data in `samples` has a single writer (the poll thread) and is read only after that thread joins.
 
 ### 0.5 Verify on veth
 

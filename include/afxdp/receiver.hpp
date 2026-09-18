@@ -89,8 +89,7 @@ public:
                     __builtin_ia32_pause();
                 }
             } else {
-                std::atomic_ref<std::uint64_t>(stats_.packets_received)
-                    .fetch_add(processed, std::memory_order_relaxed);
+                packets_received_.fetch_add(processed, std::memory_order_relaxed);
             }
         }
     }
@@ -100,7 +99,10 @@ public:
         std::uint64_t fill_refills = 0;
     };
 
-    [[nodiscard]] const Stats& stats() const noexcept { return stats_; }
+    [[nodiscard]] Stats stats() const noexcept {
+        return {.packets_received = packets_received_.load(std::memory_order_relaxed),
+                .fill_refills = fill_refills_.load(std::memory_order_relaxed)};
+    }
 
 private:
     [[nodiscard]] std::uint32_t poll_rx() noexcept {
@@ -132,8 +134,7 @@ private:
         if (xsk_.fill().available() < fill_threshold_) {
             const std::uint32_t pushed = xsk_.refill_fill(alloc_);
             if (pushed > 0) {
-                std::atomic_ref<std::uint64_t>(stats_.fill_refills)
-                    .fetch_add(1, std::memory_order_relaxed);
+                fill_refills_.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
@@ -171,7 +172,8 @@ private:
     bool busy_poll_ = false;
     std::uint64_t frame_mask_;
 
-    alignas(CACHE_SIZE) Stats stats_{};
+    alignas(CACHE_SIZE) std::atomic<std::uint64_t> packets_received_{0};
+    std::atomic<std::uint64_t> fill_refills_{0};
 };
 
 } // namespace afxdp

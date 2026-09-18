@@ -44,10 +44,11 @@ constexpr std::size_t ALLOC_CAP = 8192;
 constexpr std::size_t FRAME_LEN = 64;
 constexpr std::uint64_t DROP_ANOMALY = 100000;
 
-// custom signal handler
-volatile sig_atomic_t g_stop = 0;
+// A signal can run on either thread; its atomic store must be signal-safe.
+static_assert(std::atomic<bool>::is_always_lock_free);
+std::atomic<bool> g_stop{false};
 void signal_handler(int /*signum*/) noexcept {
-    g_stop = 1;
+    g_stop.store(true, std::memory_order_relaxed);
 }
 
 void print_usage(const char* prog) {
@@ -161,10 +162,10 @@ int main(int argc, char* argv[]) {
 
     afxdp::Transmitter<ALLOC_CAP> tx(xsk, alloc, umem);
 
-    struct BenchStats {
-        std::uint64_t packets = 0;
-        std::uint64_t bytes = 0;
-        std::uint64_t echoed = 0;
+    struct alignas(afxdp::CACHE_SIZE) BenchStats {
+        std::atomic<std::uint64_t> packets{0};
+        std::atomic<std::uint64_t> bytes{0};
+        std::atomic<std::uint64_t> echoed{0};
     };
     BenchStats bench{};
 
@@ -175,12 +176,16 @@ int main(int argc, char* argv[]) {
     auto strategy = [&tx, &bench, &samples](const afxdp::PacketView& pkt) noexcept {
         const auto t0 = afxdp::bench::rdtsc();
         (void)afxdp::bench::reflect_swap(pkt.data);
-        bench.packets++;
-        bench.bytes += pkt.data.size();
+        // Only the poll thread writes these counters; no locked RMW is needed.
+        bench.packets.store(bench.packets.load(std::memory_order_relaxed) + 1,
+                            std::memory_order_relaxed);
+        bench.bytes.store(bench.bytes.load(std::memory_order_relaxed) + pkt.data.size(),
+                          std::memory_order_relaxed);
         const bool transferred = tx.send_in_place(pkt.addr,
                                                   static_cast<std::uint32_t>(pkt.data.size()));
         if (transferred) {
-            ++bench.echoed;
+            bench.echoed.store(bench.echoed.load(std::memory_order_relaxed) + 1,
+                               std::memory_order_relaxed);
         }
         samples.record(afxdp::bench::rdtsc() - t0);
         return transferred ? afxdp::FrameDisposition::Transferred
@@ -199,45 +204,38 @@ int main(int argc, char* argv[]) {
     {
         std::jthread poll_thread([&receiver](std::stop_token st) { receiver.run(std::move(st)); });
 
-        // The engine counters are written by the poll thread; read them through
-        // std::atomic_ref (relaxed) so the cross-thread read is race-free. bench_*
-        // stays a plain liveness readout, not a published metric.
-        auto load = [](const std::uint64_t& v) noexcept {
-            return std::atomic_ref<std::uint64_t>(const_cast<std::uint64_t&>(v))
-                .load(std::memory_order_relaxed);
-        };
-
         using Clock = std::chrono::steady_clock;
         auto last_report = Clock::now();
         std::uint64_t last_drops = 0;
 
-        while (!g_stop) {
+        while (!g_stop.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
 
             const auto now = Clock::now();
             const auto elapsed_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - last_report).count();
 
-            const auto& rstats = receiver.stats();
-            const auto& tstats = tx.stats();
-            const std::uint64_t drops = load(tstats.drops);
+            // Each counter is race-free; the group is not one coherent snapshot.
+            const auto rstats = receiver.stats();
+            const auto tstats = tx.stats();
+            const std::uint64_t drops = tstats.drops;
             std::println("[stats] Δt={}ms | rx={} | fill_refills={} | tx={} | tx_drops={} | "
                          "bench_pkts={} | bench_bytes={} | bench_echoed={}",
                          elapsed_ms,
-                         load(rstats.packets_received),
-                         load(rstats.fill_refills),
-                         load(tstats.packets_sent),
+                         rstats.packets_received,
+                         rstats.fill_refills,
+                         tstats.packets_sent,
                          drops,
-                         bench.packets,
-                         bench.bytes,
-                         bench.echoed);
+                         bench.packets.load(std::memory_order_relaxed),
+                         bench.bytes.load(std::memory_order_relaxed),
+                         bench.echoed.load(std::memory_order_relaxed));
 
             const std::uint64_t drops_in_window = drops - last_drops;
             if (drops_in_window > DROP_ANOMALY) {
                 std::println(stderr,
                              "[control] drop anomaly ({} in last window) — shutting down",
                              drops_in_window);
-                g_stop = 1;
+                g_stop.store(true, std::memory_order_relaxed);
             }
             last_drops = drops;
             last_report = now;
@@ -247,7 +245,7 @@ int main(int argc, char* argv[]) {
         poll_thread.request_stop();
     }
 
-    // Poll thread has joined (jthread destructor above), so plain reads are safe.
+    // The poll thread has joined, so the histogram's plain reads are safe.
     samples.report(ns_per_tick, "service");
     samples.dump_csv("service_ns.csv", ns_per_tick);
 

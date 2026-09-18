@@ -41,13 +41,13 @@ public:
         }
 
         xsk_.completion().advance_consumer(n);
-        stats_.completions += n;
+        completions_.fetch_add(n, std::memory_order_relaxed);
         return n;
     }
 
     [[nodiscard]] bool send_in_place(std::uint64_t addr, std::uint32_t length) noexcept {
         if (length == 0 || length > frame_size_) [[unlikely]] {
-            std::atomic_ref<std::uint64_t>(stats_.drops).fetch_add(1, std::memory_order_relaxed);
+            drops_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
 
@@ -62,8 +62,7 @@ public:
         if (tx_used_ == tx_avail_) [[unlikely]] {
             tx_avail_ = xsk_.tx().reserve(xsk_.tx().capacity()).amount;
             if (tx_used_ == tx_avail_) {
-                std::atomic_ref<std::uint64_t>(stats_.drops)
-                    .fetch_add(1, std::memory_order_relaxed);
+                drops_.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
         }
@@ -78,8 +77,7 @@ public:
         if (tx_used_ > 0) {
             xsk_.tx().advance_producer(tx_used_);
             xsk_.kick_tx();
-            std::atomic_ref<std::uint64_t>(stats_.packets_sent)
-                .fetch_add(tx_used_, std::memory_order_relaxed);
+            packets_sent_.fetch_add(tx_used_, std::memory_order_relaxed);
         }
         tx_used_ = 0;
         reserved_ = false;
@@ -92,7 +90,11 @@ public:
         std::uint64_t drops = 0;
     };
 
-    [[nodiscard]] const Stats& stats() const noexcept { return stats_; }
+    [[nodiscard]] Stats stats() const noexcept {
+        return {.packets_sent = packets_sent_.load(std::memory_order_relaxed),
+                .completions = completions_.load(std::memory_order_relaxed),
+                .drops = drops_.load(std::memory_order_relaxed)};
+    }
 
 private:
     Xsk& xsk_;
@@ -105,7 +107,9 @@ private:
     std::uint32_t tx_used_ = 0;
     bool reserved_ = false;
 
-    alignas(CACHE_SIZE) Stats stats_{};
+    alignas(CACHE_SIZE) std::atomic<std::uint64_t> packets_sent_{0};
+    std::atomic<std::uint64_t> completions_{0};
+    std::atomic<std::uint64_t> drops_{0};
 };
 
 } // namespace afxdp

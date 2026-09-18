@@ -111,7 +111,7 @@ The bundled callback is a reflector: it counts every matched frame and echoes it
 
 Two validity caveats, stated so the numbers aren't over-read:
 
-1. The stats counters are currently written by the poll thread and read by the reporting thread without synchronization — fine as a liveness/health readout, not yet publication-grade instrumentation.
+1. Each stats counter is read and written atomically, but the counters in one report can reflect different instants; a report is not a coherent point-in-time snapshot.
 2. veth numbers exercise the software path only. Latency/throughput claims belong on a physical NIC.
 
 ## Running as a service
