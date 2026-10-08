@@ -8,7 +8,9 @@
 #include "ring.hpp"
 #include "umem.hpp"
 #include <arpa/inet.h>
+#include <cerrno>
 #include <cstdint>
+#include <expected>
 #include <linux/if_xdp.h>
 #include <net/if.h>
 #include <string>
@@ -27,6 +29,10 @@ struct XskConfig {
     std::uint32_t busy_poll_budget = 64;
     std::uint32_t busy_poll_timeout_us = 20;
 };
+
+[[nodiscard]] constexpr bool is_expected_wakeup_retry(int error) noexcept {
+    return error == EAGAIN || error == EINTR || error == EBUSY;
+}
 
 class Xsk {
 public:
@@ -47,22 +53,23 @@ public:
     [[nodiscard]] int raw_desc() const noexcept { return fd_.get(); }
     [[nodiscard]] bool busy_poll() const noexcept { return busy_poll_; }
 
-    void busy_poll_rx() const noexcept {
-        ::recvfrom(fd_.get(), nullptr, 0, MSG_DONTWAIT, nullptr, nullptr);
-    }
-
-    void kick_fill() const noexcept {
+    [[nodiscard]] std::expected<void, int> kick_fill() const noexcept {
         if (busy_poll_ || fill_.need_wakeup()) {
-            ::recvfrom(fd_.get(), nullptr, 0, MSG_DONTWAIT, nullptr, nullptr);
+            if (::recvfrom(fd_.get(), nullptr, 0, MSG_DONTWAIT, nullptr, nullptr) < 0)
+                return std::unexpected(errno);
         }
+        return {};
     }
 
-    void kick_tx() const noexcept {
+    [[nodiscard]] std::expected<void, int> kick_tx() const noexcept {
         if (busy_poll_ || tx_.need_wakeup()) {
-            ::sendto(fd_.get(), nullptr, 0, MSG_DONTWAIT, nullptr, 0);
+            if (::sendto(fd_.get(), nullptr, 0, MSG_DONTWAIT, nullptr, 0) < 0)
+                return std::unexpected(errno);
         }
+        return {};
     }
 
+    // Publishes buffers only; the caller services wakeups after its maintenance pass.
     template<std::size_t CAPACITY>
     std::uint32_t refill_fill(FrameAllocator<CAPACITY>& alloc) noexcept {
         const auto [n, start] = fill_.reserve(fill_.capacity());
@@ -78,7 +85,6 @@ public:
 
         if (pushed > 0) {
             fill_.advance_producer(pushed);
-            kick_fill();
         }
 
         return pushed;

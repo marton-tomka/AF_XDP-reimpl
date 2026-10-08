@@ -20,3 +20,9 @@ compile_commands.json
 # Crash dumps
 core
 core.*
+
+# AI junk
+.agents/
+.cache/
+sand/
+tests/

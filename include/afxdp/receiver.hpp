@@ -12,7 +12,6 @@
 #include <concepts>
 #include <cstdint>
 #include <cstring>
-#include <format>
 #include <pthread.h>
 #include <sched.h>
 #include <span>
@@ -73,15 +72,19 @@ public:
     Receiver(const Receiver&) = delete;
     Receiver& operator=(const Receiver&) = delete;
 
-    void run(std::stop_token st) {
+    [[nodiscard]] std::expected<void, int> prepare_thread() const noexcept {
         if (cfg_.cpu_affinity >= 0) {
-            pin_to_cpu(cfg_.cpu_affinity);
+            if (auto result = pin_to_cpu(cfg_.cpu_affinity); !result) return result;
         }
 
         if (cfg_.realtime_sched) {
-            set_realtime();
+            if (auto result = set_realtime(); !result) return result;
         }
+        return {};
+    }
 
+    // Call prepare_thread() on this thread before activating packet redirection.
+    void run(std::stop_token st) {
         while (!st.stop_requested()) {
             const std::uint32_t processed = poll_rx();
             if (processed == 0) {
@@ -97,23 +100,18 @@ public:
     struct Stats {
         std::uint64_t packets_received = 0;
         std::uint64_t fill_refills = 0;
+        int first_wakeup_error = 0;
     };
 
     [[nodiscard]] Stats stats() const noexcept {
         return {.packets_received = packets_received_.load(std::memory_order_relaxed),
-                .fill_refills = fill_refills_.load(std::memory_order_relaxed)};
+                .fill_refills = fill_refills_.load(std::memory_order_relaxed),
+                .first_wakeup_error = first_wakeup_error_.load(std::memory_order_relaxed)};
     }
 
 private:
     [[nodiscard]] std::uint32_t poll_rx() noexcept {
         const auto [n, start] = xsk_.rx().peek(static_cast<std::uint32_t>(cfg_.batch_size));
-
-        if (n == 0) [[unlikely]] {
-            if (busy_poll_) {
-                xsk_.busy_poll_rx();
-            }
-            return 0;
-        }
 
         for (std::uint32_t i{}; i < n; ++i) [[likely]] {
             const xdp_desc& desc = xsk_.rx().desc_at(start + i);
@@ -127,39 +125,48 @@ private:
             }
         }
 
-        xsk_.rx().advance_consumer(n);
+        if (n > 0) xsk_.rx().advance_consumer(n);
 
         commit_tx_();
 
+        std::uint32_t pushed = 0;
         if (xsk_.fill().available() < fill_threshold_) {
-            const std::uint32_t pushed = xsk_.refill_fill(alloc_);
+            pushed = xsk_.refill_fill(alloc_);
             if (pushed > 0) {
                 fill_refills_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+
+        // Wakeups can become necessary after the last refill or RX batch.
+        if (n == 0 || pushed > 0 || xsk_.fill().need_wakeup()) {
+            if (const auto result = xsk_.kick_fill(); !result) {
+                const int error = result.error();
+                if (!is_expected_wakeup_retry(error) &&
+                    first_wakeup_error_.load(std::memory_order_relaxed) == 0) [[unlikely]] {
+                    first_wakeup_error_.store(error, std::memory_order_relaxed);
+                }
             }
         }
 
         return n;
     }
 
-    static void pin_to_cpu(int cpu) noexcept {
+    [[nodiscard]] static std::expected<void, int> pin_to_cpu(int cpu) noexcept {
+        if (cpu >= CPU_SETSIZE) return std::unexpected(EINVAL);
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         CPU_SET(static_cast<std::size_t>(cpu), &cpuset);
 
         const int rc = ::pthread_setaffinity_np(::pthread_self(), sizeof(cpuset), &cpuset);
-        if (rc != 0) {
-            log(LogLevel::Warn,
-                std::format("pthread_setaffinity_np failed: {}", std::strerror(rc)));
-        }
+        if (rc != 0) return std::unexpected(rc);
+        return {};
     }
 
-    static void set_realtime() noexcept {
+    [[nodiscard]] static std::expected<void, int> set_realtime() noexcept {
         struct sched_param param{};
         param.sched_priority = 99;
-        if (::sched_setscheduler(0, SCHED_FIFO, &param) != 0) {
-            log(LogLevel::Warn,
-                std::format("sched_setscheduler(SCHED_FIFO) failed: {}", std::strerror(errno)));
-        }
+        if (::sched_setscheduler(0, SCHED_FIFO, &param) != 0) return std::unexpected(errno);
+        return {};
     }
 
     Xsk& xsk_;
@@ -174,6 +181,7 @@ private:
 
     alignas(CACHE_SIZE) std::atomic<std::uint64_t> packets_received_{0};
     std::atomic<std::uint64_t> fill_refills_{0};
+    std::atomic<int> first_wakeup_error_{0};
 };
 
 } // namespace afxdp

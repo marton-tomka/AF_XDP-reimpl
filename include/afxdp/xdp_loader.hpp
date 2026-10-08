@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include <cerrno>
 #include <cstdint>
 #include <linux/if_link.h>
 #include <net/if.h>
@@ -30,30 +31,52 @@ public:
         : obj_(std::exchange(o.obj_, nullptr))
         , ifindex_(std::exchange(o.ifindex_, 0))
         , flags_(std::exchange(o.flags_, 0))
-        , ip_map_fd_(std::exchange(o.ip_map_fd_, -1)) {}
+        , ip_map_fd_(std::exchange(o.ip_map_fd_, -1))
+        , xsk_map_fd_(std::exchange(o.xsk_map_fd_, -1))
+        , queue_id_(o.queue_id_)
+        , redirecting_(std::exchange(o.redirecting_, false)) {}
     XdpLoader& operator=(XdpLoader&& o) noexcept {
         if (this != &o) {
-            detach();
+            release();
             obj_ = std::exchange(o.obj_, nullptr);
             ifindex_ = std::exchange(o.ifindex_, 0);
             flags_ = std::exchange(o.flags_, 0);
             ip_map_fd_ = std::exchange(o.ip_map_fd_, -1);
+            xsk_map_fd_ = std::exchange(o.xsk_map_fd_, -1);
+            queue_id_ = o.queue_id_;
+            redirecting_ = std::exchange(o.redirecting_, false);
         }
         return *this;
     }
 
-    ~XdpLoader() { detach(); }
+    ~XdpLoader() { release(); }
 
     [[nodiscard]] expect<void> update_filter_ip(std::string_view ip_str) noexcept;
+
+    [[nodiscard]] std::expected<void, int> stop_redirect() noexcept {
+        if (!redirecting_) return {};
+        if (::bpf_map_delete_elem(xsk_map_fd_, &queue_id_) != 0) {
+            const int error = errno;
+            if (error != ENOENT) return std::unexpected(error);
+        }
+        redirecting_ = false;
+        return {};
+    }
+
+    [[nodiscard]] std::expected<void, int> detach() noexcept {
+        if (ifindex_ == 0) return {};
+        const int result = ::bpf_xdp_detach(static_cast<int>(ifindex_), flags_, nullptr);
+        if (result != 0) return std::unexpected(-result);
+        ifindex_ = 0;
+        return {};
+    }
 
 private:
     XdpLoader() = default;
 
-    void detach() noexcept {
-        if (obj_ && ifindex_) {
-            ::bpf_xdp_detach(static_cast<int>(ifindex_), flags_, nullptr);
-            ifindex_ = 0;
-        }
+    void release() noexcept {
+        static_cast<void>(stop_redirect());
+        static_cast<void>(detach());
         if (obj_) {
             ::bpf_object__close(obj_);
             obj_ = nullptr;
@@ -73,6 +96,9 @@ private:
     std::uint32_t ifindex_ = 0;
     std::uint32_t flags_ = 0;
     int ip_map_fd_ = -1;
+    int xsk_map_fd_ = -1;
+    std::uint32_t queue_id_ = 0;
+    bool redirecting_ = false;
 };
 
 inline expect<XdpLoader> XdpLoader::create(std::string_view bpf_obj_path,
@@ -91,43 +117,44 @@ inline expect<XdpLoader> XdpLoader::create(std::string_view bpf_obj_path,
             make_errno_error(std::format("bpf_object__open('{}') failed", bpf_obj_path)));
     }
 
+    XdpLoader loader;
+    loader.obj_ = obj;
+    loader.queue_id_ = queue_id;
+
     if (::bpf_object__load(obj) != 0) {
-        ::bpf_object__close(obj);
         return UNexpected(make_errno_error("bpf_object__load failed"));
     }
 
     bpf_map* xsk_map = ::bpf_object__find_map_by_name(obj, "xsks_map");
     if (!xsk_map) {
-        ::bpf_object__close(obj);
         return UNexpected(make_logic_error("xsks_map not found in BPF object"));
     }
     const int xsk_map_fd = ::bpf_map__fd(xsk_map);
+    loader.xsk_map_fd_ = xsk_map_fd;
 
     {
         int key = static_cast<int>(queue_id);
         if (::bpf_map_update_elem(xsk_map_fd, &key, &xsk_fd, BPF_ANY) != 0) {
-            ::bpf_object__close(obj);
             return UNexpected(make_errno_error("bpf_map_update_elem(xsks_map)"));
         }
+        loader.redirecting_ = true;
     }
 
     bpf_map* ip_map = ::bpf_object__find_map_by_name(obj, "target_ip_map");
     if (!ip_map) {
-        ::bpf_object__close(obj);
         return UNexpected(make_logic_error("target_ip_map not found in BPF object"));
     }
     const int ip_map_fd = ::bpf_map__fd(ip_map);
+    loader.ip_map_fd_ = ip_map_fd;
 
     {
         auto ip_result = parse_ipv4(filter_ip);
         if (!ip_result) {
-            ::bpf_object__close(obj);
             return std::unexpected(ip_result.error());
         }
         std::uint32_t key = 0;
         std::uint32_t addr = *ip_result;
         if (::bpf_map_update_elem(ip_map_fd, &key, &addr, BPF_ANY) != 0) {
-            ::bpf_object__close(obj);
             return UNexpected(make_errno_error("bpf_map_update_elem(target_ip_map)"));
         }
         log(LogLevel::Info, std::format("XDP filter: capturing packets from {}", filter_ip));
@@ -135,7 +162,6 @@ inline expect<XdpLoader> XdpLoader::create(std::string_view bpf_obj_path,
 
     bpf_program* prog = ::bpf_object__find_program_by_name(obj, "xdp_filter_ip");
     if (!prog) {
-        ::bpf_object__close(obj);
         return UNexpected(make_logic_error("xdp_filter_ip not found in BPF object"));
     }
 
@@ -155,20 +181,16 @@ inline expect<XdpLoader> XdpLoader::create(std::string_view bpf_obj_path,
         used_flags = XDP_FLAGS_SKB_MODE;
         attach_rc = ::bpf_xdp_attach(static_cast<int>(ifindex), prog_fd, used_flags, &attach_opts);
         if (attach_rc != 0) {
-            ::bpf_object__close(obj);
             errno = -attach_rc;
             return UNexpected(make_errno_error("bpf_xdp_attach(SKB mode)"));
         }
-        log(LogLevel::Info, "XDP attached in SKB (generic) mode");
-    } else {
-        log(LogLevel::Info, "XDP attached in DRV (native) mode");
     }
 
-    XdpLoader loader;
-    loader.obj_ = obj;
     loader.ifindex_ = ifindex;
     loader.flags_ = used_flags;
-    loader.ip_map_fd_ = ip_map_fd;
+    log(LogLevel::Info,
+        used_flags == XDP_FLAGS_DRV_MODE ? "XDP attached in DRV (native) mode"
+                                         : "XDP attached in SKB (generic) mode");
     return loader;
 }
 
