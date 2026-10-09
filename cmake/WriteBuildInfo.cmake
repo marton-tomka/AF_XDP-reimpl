@@ -1,0 +1,43 @@
+# Refresh at build time, including builds made without rerunning CMake configuration.
+execute_process(COMMAND git -C "${SOURCE_DIR}" rev-parse HEAD
+    OUTPUT_VARIABLE SOURCE_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT SOURCE_REVISION)
+    set(SOURCE_REVISION "unavailable")
+endif()
+execute_process(COMMAND git -C "${SOURCE_DIR}" status --porcelain --untracked-files=normal
+    OUTPUT_VARIABLE SOURCE_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(SOURCE_REVISION STREQUAL "unavailable")
+    set(SOURCE_STATE "unavailable")
+elseif(SOURCE_STATUS)
+    set(SOURCE_STATE "dirty")
+else()
+    set(SOURCE_STATE "clean")
+endif()
+
+# The fingerprint includes uncommitted/new application sources, not just HEAD.
+file(GLOB_RECURSE INPUTS RELATIVE "${SOURCE_DIR}"
+    "${SOURCE_DIR}/include/afxdp/*.hpp" "${SOURCE_DIR}/bpf/*.c" "${SOURCE_DIR}/cmake/*")
+list(APPEND INPUTS main.cpp CMakeLists.txt)
+list(SORT INPUTS)
+set(MANIFEST "")
+foreach(INPUT IN LISTS INPUTS)
+    file(SHA256 "${SOURCE_DIR}/${INPUT}" HASH)
+    string(APPEND MANIFEST "${INPUT} ${HASH}\n")
+endforeach()
+string(SHA256 SOURCE_FINGERPRINT "${MANIFEST}")
+
+set(COMPILE_COMMAND "unavailable; retain the build's compile_commands.json")
+if(EXISTS "${BINARY_DIR}/compile_commands.json")
+    file(READ "${BINARY_DIR}/compile_commands.json" COMMANDS)
+    string(JSON COUNT LENGTH "${COMMANDS}")
+    math(EXPR LAST "${COUNT} - 1")
+    foreach(INDEX RANGE ${LAST})
+        string(JSON SOURCE GET "${COMMANDS}" ${INDEX} file)
+        if(SOURCE STREQUAL "${SOURCE_DIR}/main.cpp")
+            string(JSON COMPILE_COMMAND GET "${COMMANDS}" ${INDEX} command)
+            break()
+        endif()
+    endforeach()
+endif()
+file(MAKE_DIRECTORY "${BINARY_DIR}/generated")
+configure_file("${SOURCE_DIR}/cmake/build_info.hpp.in" "${BINARY_DIR}/generated/build_info.hpp" @ONLY)

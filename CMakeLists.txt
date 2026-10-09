@@ -86,8 +86,27 @@ add_custom_command(
 add_custom_target(xdp_prog ALL DEPENDS ${BPF_OBJECT})
 add_dependencies(afxdp_receiver xdp_prog)
 
+add_custom_target(afxdp_build_info
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+        "-DCOMPILER=${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}"
+        "-DCONFIGURATION=$<CONFIG>"
+        "-DLIBBPF_VERSION=${LIBBPF_VERSION}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteBuildInfo.cmake"
+    BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.hpp"
+    VERBATIM
+)
+add_dependencies(afxdp_receiver afxdp_build_info)
+target_include_directories(afxdp_receiver PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(afxdp_reflector_tests tests/reflector.cpp)
+    target_link_libraries(afxdp_reflector_tests PRIVATE afxdp project_warnings project_sanitizers)
+    add_test(NAME afxdp_reflector COMMAND afxdp_reflector_tests)
+    set_tests_properties(afxdp_reflector PROPERTIES TIMEOUT 10)
+
     add_executable(afxdp_io_progress_tests tests/io_progress.cpp)
     target_link_libraries(afxdp_io_progress_tests PRIVATE
         afxdp project_warnings project_sanitizers
@@ -107,6 +126,8 @@ if(BUILD_TESTING)
     set_tests_properties(afxdp_measurement PROPERTIES TIMEOUT 10)
 
     add_executable(afxdp_lifecycle_tests tests/lifecycle.cpp)
+    add_dependencies(afxdp_lifecycle_tests afxdp_build_info)
+    target_include_directories(afxdp_lifecycle_tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(afxdp_lifecycle_tests PRIVATE afxdp project_warnings project_sanitizers)
     target_link_options(afxdp_lifecycle_tests PRIVATE
         -Wl,--wrap=mmap,--wrap=munmap,--wrap=socket,--wrap=close,--wrap=setrlimit,--wrap=mlock

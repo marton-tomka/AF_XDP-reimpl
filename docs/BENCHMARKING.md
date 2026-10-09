@@ -1,5 +1,7 @@
 # Benchmarking
 
+For the current packet contract, counter names, sample/export semantics, and ring/RX/TX method names, see [the implementation notes](REPORTING_AND_PACKET_CONTRACT.md). The instrumentation snippets and session results below describe earlier revisions.
+
 How to produce defensible numbers for `afxdp_receiver` without owning two machines with real NICs.
 
 Three phases, in order. Phase 0 is mandatory — without it the other two produce nothing you can publish. Phase 1 is free and runs on one laptop. Phase 2 costs a few dollars and anchors the result to real hardware.

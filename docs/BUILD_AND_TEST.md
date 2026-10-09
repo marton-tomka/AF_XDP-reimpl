@@ -1,5 +1,7 @@
 # Build & Test
 
+The current reflector contract, output fields, and unprivileged regression commands are documented in [the implementation notes](REPORTING_AND_PACKET_CONTRACT.md).
+
 How to build `afxdp_receiver`, run it, and verify the full path (XDP filter → redirect → userspace callback) end to end, including on a machine with no spare NIC, using a veth pair.
 
 ## Prerequisites

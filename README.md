@@ -27,7 +27,9 @@ Error handling is `std::expected` end to end; there are no exceptions.
 
 ## Current scope
 
-Single RX queue, single socket, IPv4-only filtering. The receive callback gets raw Ethernet frames, and there is no userspace protocol stack built on top. The bundled callback is a reflector benchmark: it counts packets/bytes and echoes each matched frame back out the TX ring, with counters (`bench_pkts`, `bench_bytes`, `bench_echoed`) reported on the once-a-second stats line. No end-to-end packet-latency measurement as of the current version.
+Single RX queue, single socket, IPv4-only filtering. The receive callback gets raw Ethernet frames. The bundled reflector expects known unicast peers, untagged IPv4/UDP, a 20-byte IPv4 header, no fragmentation, and an IPv4 MTU of 1500. Unsupported layouts are counted and recycled. The XDP source-IP filter is broader than this callback's packet contract.
+
+Reports distinguish RX processing, TX staging, TX publication, CQ reclamation, and rejected frames. Kernel socket statistics are queried on the control thread. After shutdown, `callback_tx_staging_ns.csv` contains the sorted callback/staging sample distribution and `run_metadata.txt` retains build settings, actual operating modes, counters, and outcome. These measurements do not establish wire delivery or end-to-end latency. The [implementation notes](docs/REPORTING_AND_PACKET_CONTRACT.md) explain the contract, counter meanings, renamed methods, assembly, and regressions.
 
 ## Performance
 

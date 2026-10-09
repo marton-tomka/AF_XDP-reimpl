@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <linux/if_xdp.h>
-#include <span>
 #include <sys/mman.h>
 #include <type_traits>
 
@@ -81,8 +80,8 @@ public:
 
     [[nodiscard]] std::uint32_t capacity() const noexcept { return num_descs_; }
 
-    // receiver side
-    [[nodiscard]] Range peek(std::uint32_t batch_size) noexcept {
+    // Consumer window; querying does not advance it. Release only the processed prefix.
+    [[nodiscard]] Range readable_range(std::uint32_t batch_size) noexcept {
         std::uint32_t entries = cached_prod_ - cached_cons_;
         if (entries == 0) {
             cached_prod_ =
@@ -94,12 +93,13 @@ public:
         return Range{.amount = entries, .start = cached_cons_};
     }
 
-    void advance_consumer(std::uint32_t amount) noexcept {
+    void release_consumed_entries(std::uint32_t amount) noexcept {
         cached_cons_ += amount;
         std::atomic_ref<std::uint32_t>(*consumer_).store(cached_cons_, std::memory_order_release);
     }
 
-    [[nodiscard]] std::uint32_t available() const noexcept {
+    // Published occupancy, not writable space. This does not refresh the local window.
+    [[nodiscard]] std::uint32_t queued_entry_count() const noexcept {
         std::uint32_t prod =
             std::atomic_ref<std::uint32_t>(*producer_).load(std::memory_order_acquire);
         std::uint32_t cons =
@@ -107,8 +107,8 @@ public:
         return prod - cons;
     }
 
-    // producer side
-    [[nodiscard]] Range reserve(std::uint32_t n) noexcept {
+    // Producer window; repeated queries overlap until the written prefix is published.
+    [[nodiscard]] Range writable_range(std::uint32_t n) noexcept {
         std::uint32_t free_n = num_descs_ - (cached_prod_ - cached_cons_);
         if (free_n < n) {
             cached_cons_ =
@@ -120,7 +120,7 @@ public:
         return Range{.amount = n, .start = cached_prod_};
     }
 
-    void advance_producer(std::uint32_t amount) noexcept {
+    void publish_written_entries(std::uint32_t amount) noexcept {
         cached_prod_ += amount;
         std::atomic_ref<std::uint32_t>(*producer_).store(cached_prod_, std::memory_order_release);
     }

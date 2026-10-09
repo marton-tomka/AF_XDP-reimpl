@@ -36,13 +36,15 @@ public:
     Umem(Umem&& o) noexcept
         : base_(std::exchange(o.base_, nullptr))
         , size_(std::exchange(o.size_, 0))
-        , cfg_(o.cfg_) {}
+        , cfg_(o.cfg_)
+        , uses_hugetlb_(o.uses_hugetlb_) {}
     Umem& operator=(Umem&& o) noexcept {
         if (this != &o) {
             release();
             base_ = std::exchange(o.base_, nullptr);
             size_ = std::exchange(o.size_, 0);
             cfg_ = o.cfg_;
+            uses_hugetlb_ = o.uses_hugetlb_;
         }
         return *this;
     }
@@ -52,6 +54,7 @@ public:
     [[nodiscard]] void* base_ptr() const noexcept { return base_; }
     [[nodiscard]] std::size_t byte_size() const noexcept { return size_; }
     [[nodiscard]] const UmemConfig& config() const noexcept { return cfg_; }
+    [[nodiscard]] bool uses_hugetlb() const noexcept { return uses_hugetlb_; }
 
 private:
     Umem() = default;
@@ -67,6 +70,7 @@ private:
     void* base_ = nullptr;
     std::size_t size_ = 0;
     UmemConfig cfg_{};
+    bool uses_hugetlb_ = false;
 };
 
 inline expect<Umem> Umem::create(const UmemConfig& cfg) {
@@ -117,6 +121,7 @@ inline expect<Umem> Umem::create(const UmemConfig& cfg) {
     u.base_ = base;
     u.size_ = total;
     u.cfg_ = cfg;
+    u.uses_hugetlb_ = used_huge;
     return u; // std::expected<Umem,AfxdpError> value state, move-constructs
 }
 

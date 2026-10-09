@@ -52,6 +52,7 @@ public:
     ~XdpLoader() { release(); }
 
     [[nodiscard]] expect<void> update_filter_ip(std::string_view ip_str) noexcept;
+    [[nodiscard]] bool native_mode() const noexcept { return flags_ == XDP_FLAGS_DRV_MODE; }
 
     [[nodiscard]] std::expected<void, int> stop_redirect() noexcept {
         if (!redirecting_) return {};

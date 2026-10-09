@@ -16,8 +16,6 @@
 #include <ctime>
 #include <expected>
 #include <linux/if_ether.h>
-#include <linux/ip.h>
-#include <linux/udp.h>
 #include <memory>
 #include <print>
 #include <span>
@@ -116,14 +114,19 @@ public:
                      static_cast<double>(buf_[n_ - 1]) * ns_per_tick);
     }
 
-    void dump_csv(const char* path, double ns_per_tick) const noexcept {
+    [[nodiscard]] std::expected<void, int> dump_csv(const char* path,
+                                                    double ns_per_tick) const noexcept {
         std::FILE* f = std::fopen(path, "w");
-        if (!f) return;
-        std::fprintf(f, "callback_tx_staging_ns\n");
-        for (std::size_t i = 0; i < n_; ++i) {
-            std::fprintf(f, "%.0f\n", static_cast<double>(buf_[i]) * ns_per_tick);
+        if (!f) return std::unexpected(errno);
+        int error = 0;
+        if (std::fprintf(f, "callback_tx_staging_ns\n") < 0) error = errno ? errno : EIO;
+        for (std::size_t i = 0; i < n_ && error == 0; ++i) {
+            if (std::fprintf(f, "%.0f\n", static_cast<double>(buf_[i]) * ns_per_tick) < 0)
+                error = errno ? errno : EIO;
         }
-        std::fclose(f);
+        if (std::fclose(f) != 0 && error == 0) error = errno ? errno : EIO;
+        if (error != 0) return std::unexpected(error);
+        return {};
     }
 
     [[nodiscard]] std::size_t count() const noexcept { return n_; }
@@ -136,26 +139,42 @@ private:
     std::atomic<bool> enabled_{false};
 };
 
+inline constexpr std::size_t REFLECTOR_IPV4_MTU = 1500;
+
+// Known unicast peers, valid input checksums. Unsupported shapes leave all bytes unchanged.
 [[nodiscard]] inline bool reflect_swap(std::span<std::byte> f) noexcept {
-    if (f.size() < sizeof(ethhdr) + sizeof(iphdr)) return false;
+    constexpr std::size_t ethernet = 14, ipv4 = 20, udp = 8;
+    if (f.size() < ethernet + ipv4 + udp || f.size() > ethernet + REFLECTOR_IPV4_MTU) return false;
 
-    auto* eth = reinterpret_cast<ethhdr*>(f.data());
-    if (eth->h_proto != htons(ETH_P_IP)) return false;
-    std::uint8_t mac[ETH_ALEN];
-    std::memcpy(mac, eth->h_dest, ETH_ALEN);
-    std::memcpy(eth->h_dest, eth->h_source, ETH_ALEN);
-    std::memcpy(eth->h_source, mac, ETH_ALEN);
+    auto read_be16 = [&](std::size_t offset) noexcept {
+        std::uint16_t value;
+        std::memcpy(&value, f.data() + offset, sizeof(value));
+        return ntohs(value);
+    };
+    if (read_be16(12) != ETH_P_IP || f[14] != std::byte{0x45} || f[23] != std::byte{IPPROTO_UDP})
+        return false;
+    // Only DF is permitted: reject the reserved flag, MF, and any fragment offset.
+    if ((read_be16(20) & 0xbfff) != 0) return false;
+    const std::size_t ip_length = read_be16(16);
+    if (ip_length < ipv4 + udp || ip_length > f.size() - ethernet ||
+        read_be16(38) != ip_length - ipv4)
+        return false;
 
-    auto* ip = reinterpret_cast<iphdr*>(f.data() + sizeof(ethhdr));
-    if (ip->version != 4) return false;
-    std::swap(ip->saddr, ip->daddr);
-
-    const std::size_t ihl = static_cast<std::size_t>(ip->ihl) * 4;
-    if (ip->protocol == IPPROTO_UDP && f.size() >= sizeof(ethhdr) + ihl + sizeof(udphdr)) {
-        auto* udp = reinterpret_cast<udphdr*>(f.data() + sizeof(ethhdr) + ihl);
-        std::swap(udp->source, udp->dest);
-        udp->check = 0; // legal for IPv4: "checksum not computed"
-    }
+    std::byte mac[6];
+    std::memcpy(mac, f.data(), 6);
+    std::memcpy(f.data(), f.data() + 6, 6);
+    std::memcpy(f.data() + 6, mac, 6);
+    std::uint32_t source_ip, destination_ip;
+    std::memcpy(&source_ip, f.data() + 26, 4);
+    std::memcpy(&destination_ip, f.data() + 30, 4);
+    std::memcpy(f.data() + 26, &destination_ip, 4);
+    std::memcpy(f.data() + 30, &source_ip, 4);
+    std::uint16_t source_port, destination_port;
+    std::memcpy(&source_port, f.data() + 34, 2);
+    std::memcpy(&destination_port, f.data() + 36, 2);
+    std::memcpy(f.data() + 34, &destination_port, 2);
+    std::memcpy(f.data() + 36, &source_port, 2);
+    // Endpoint swaps only permute 16-bit checksum addends, including the UDP pseudo-header.
     return true;
 }
 

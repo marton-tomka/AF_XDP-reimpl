@@ -9,6 +9,7 @@
 #include "umem.hpp"
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <linux/if_xdp.h>
@@ -52,8 +53,32 @@ public:
 
     [[nodiscard]] int raw_desc() const noexcept { return fd_.get(); }
     [[nodiscard]] bool busy_poll() const noexcept { return busy_poll_; }
+    [[nodiscard]] bool zero_copy() const noexcept { return zero_copy_; }
 
-    [[nodiscard]] std::expected<void, int> kick_fill() const noexcept {
+    struct KernelStats {
+        xdp_statistics counters{};
+        socklen_t returned_bytes = 0;
+
+        [[nodiscard]] bool has_ring_counters() const noexcept {
+            return returned_bytes == sizeof(xdp_statistics);
+        }
+    };
+
+    // Cold/control path only. Old kernels expose the first three fields, not six zeros.
+    [[nodiscard]] std::expected<KernelStats, int> kernel_stats() const noexcept {
+        KernelStats result{};
+        result.returned_bytes = sizeof(result.counters);
+        if (::getsockopt(
+                fd_.get(), SOL_XDP, XDP_STATISTICS, &result.counters, &result.returned_bytes) != 0)
+            return std::unexpected(errno);
+        constexpr socklen_t legacy_size = offsetof(xdp_statistics, rx_ring_full);
+        if (result.returned_bytes != legacy_size && result.returned_bytes != sizeof(xdp_statistics))
+            return std::unexpected(EPROTO);
+        return result;
+    }
+
+    // Conditionally issue one nonblocking wakeup/poll; neither method publishes ring entries.
+    [[nodiscard]] std::expected<void, int> request_rx_progress() const noexcept {
         if (busy_poll_ || fill_.need_wakeup()) {
             if (::recvfrom(fd_.get(), nullptr, 0, MSG_DONTWAIT, nullptr, nullptr) < 0)
                 return std::unexpected(errno);
@@ -61,7 +86,7 @@ public:
         return {};
     }
 
-    [[nodiscard]] std::expected<void, int> kick_tx() const noexcept {
+    [[nodiscard]] std::expected<void, int> request_tx_progress() const noexcept {
         if (busy_poll_ || tx_.need_wakeup()) {
             if (::sendto(fd_.get(), nullptr, 0, MSG_DONTWAIT, nullptr, 0) < 0)
                 return std::unexpected(errno);
@@ -72,7 +97,7 @@ public:
     // Publishes buffers only; the caller services wakeups after its maintenance pass.
     template<std::size_t CAPACITY>
     std::uint32_t refill_fill(FrameAllocator<CAPACITY>& alloc) noexcept {
-        const auto [n, start] = fill_.reserve(fill_.capacity());
+        const auto [n, start] = fill_.writable_range(fill_.capacity());
 
         std::uint32_t pushed = 0;
         while (pushed < n) {
@@ -84,7 +109,7 @@ public:
         }
 
         if (pushed > 0) {
-            fill_.advance_producer(pushed);
+            fill_.publish_written_entries(pushed);
         }
 
         return pushed;
@@ -99,6 +124,7 @@ private:
     FillRing fill_{};
     CompletionRing completion_{};
     bool busy_poll_ = false;
+    bool zero_copy_ = false;
 };
 
 inline expect<Xsk> Xsk::create(const XskConfig& cfg, Umem& umem) {
@@ -241,6 +267,7 @@ inline expect<Xsk> Xsk::create(const XskConfig& cfg, Umem& umem) {
     xsk.fill_ = std::move(*fill);
     xsk.completion_ = std::move(*comp);
     xsk.busy_poll_ = cfg.busy_poll;
+    xsk.zero_copy_ = (sxdp.sxdp_flags & XDP_ZEROCOPY) != 0;
 
     return xsk;
 }

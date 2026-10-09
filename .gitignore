@@ -21,8 +21,3 @@ compile_commands.json
 core
 core.*
 
-# AI junk
-.agents/
-.cache/
-sand/
-tests/

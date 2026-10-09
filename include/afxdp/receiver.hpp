@@ -21,6 +21,8 @@
 
 namespace afxdp {
 
+// Borrowed single-buffer RX frame. No access after Transferred; no retention after Recycle.
+// The socket uses aligned UMEM chunks, no scatter/gather, and trusted kernel RX descriptors.
 struct PacketView {
     std::span<std::byte> data;
     std::uint64_t addr;
@@ -86,7 +88,7 @@ public:
     // Call prepare_thread() on this thread before activating packet redirection.
     void run(std::stop_token st) {
         while (!st.stop_requested()) {
-            const std::uint32_t processed = poll_rx();
+            const std::uint32_t processed = process_rx_and_maintain_io();
             if (processed == 0) {
                 if (!busy_poll_) {
                     __builtin_ia32_pause();
@@ -110,8 +112,9 @@ public:
     }
 
 private:
-    [[nodiscard]] std::uint32_t poll_rx() noexcept {
-        const auto [n, start] = xsk_.rx().peek(static_cast<std::uint32_t>(cfg_.batch_size));
+    [[nodiscard]] std::uint32_t process_rx_and_maintain_io() noexcept {
+        const auto [n, start] =
+            xsk_.rx().readable_range(static_cast<std::uint32_t>(cfg_.batch_size));
 
         for (std::uint32_t i{}; i < n; ++i) [[likely]] {
             const xdp_desc& desc = xsk_.rx().desc_at(start + i);
@@ -125,12 +128,12 @@ private:
             }
         }
 
-        if (n > 0) xsk_.rx().advance_consumer(n);
+        if (n > 0) xsk_.rx().release_consumed_entries(n);
 
         commit_tx_();
 
         std::uint32_t pushed = 0;
-        if (xsk_.fill().available() < fill_threshold_) {
+        if (xsk_.fill().queued_entry_count() < fill_threshold_) {
             pushed = xsk_.refill_fill(alloc_);
             if (pushed > 0) {
                 fill_refills_.fetch_add(1, std::memory_order_relaxed);
@@ -139,7 +142,7 @@ private:
 
         // Wakeups can become necessary after the last refill or RX batch.
         if (n == 0 || pushed > 0 || xsk_.fill().need_wakeup()) {
-            if (const auto result = xsk_.kick_fill(); !result) {
+            if (const auto result = xsk_.request_rx_progress(); !result) {
                 const int error = result.error();
                 if (!is_expected_wakeup_retry(error) &&
                     first_wakeup_error_.load(std::memory_order_relaxed) == 0) [[unlikely]] {

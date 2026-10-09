@@ -32,9 +32,9 @@ public:
     Transmitter(const Transmitter&) = delete;
     Transmitter& operator=(const Transmitter&) = delete;
 
-    std::uint32_t reap_completions(
+    std::uint32_t reclaim_completed_frames(
         std::uint32_t budget = std::numeric_limits<std::uint32_t>::max()) noexcept {
-        const auto [n, start] = xsk_.completion().peek(budget);
+        const auto [n, start] = xsk_.completion().readable_range(budget);
         if (n == 0) {
             return 0;
         }
@@ -44,20 +44,22 @@ public:
             alloc_.free(xsk_.completion().desc_at(start + i) & frame_mask_);
         }
 
-        xsk_.completion().advance_consumer(n);
+        xsk_.completion().release_consumed_entries(n);
         outstanding_ -= n;
-        completions_.fetch_add(n, std::memory_order_relaxed);
+        frames_reclaimed_.fetch_add(n, std::memory_order_relaxed);
         return n;
     }
 
+    // Original single-buffer RX address/length from this UMEM; caller owns the frame uniquely.
+    // Success transfers ownership to TX staging (not wire delivery); failure retains it.
     [[nodiscard]] bool send_in_place(std::uint64_t addr, std::uint32_t length) noexcept {
         if (length == 0 || length > frame_size_) [[unlikely]] {
-            drops_.fetch_add(1, std::memory_order_relaxed);
+            frames_rejected_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
 
         if (!reserved_) {
-            const auto [n, start] = xsk_.tx().reserve(xsk_.tx().capacity());
+            const auto [n, start] = xsk_.tx().writable_range(xsk_.tx().capacity());
             tx_avail_ = n;
             tx_start_ = start;
             tx_used_ = 0;
@@ -65,9 +67,9 @@ public:
         }
 
         if (tx_used_ == tx_avail_) [[unlikely]] {
-            tx_avail_ = xsk_.tx().reserve(xsk_.tx().capacity()).amount;
+            tx_avail_ = xsk_.tx().writable_range(xsk_.tx().capacity()).amount;
             if (tx_used_ == tx_avail_) {
-                drops_.fetch_add(1, std::memory_order_relaxed);
+                frames_rejected_.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
         }
@@ -78,57 +80,59 @@ public:
         return true;
     }
 
-    void flush() noexcept {
+    // Bounded publication/CQ/wakeup pass, including idle retries; not a full TX drain.
+    void publish_and_service_tx() noexcept {
         if (tx_used_ > 0) {
             outstanding_ += tx_used_;
-            xsk_.tx().advance_producer(tx_used_);
-            packets_sent_.fetch_add(tx_used_, std::memory_order_relaxed);
+            xsk_.tx().publish_written_entries(tx_used_);
+            frames_submitted_.fetch_add(tx_used_, std::memory_order_relaxed);
         }
         tx_used_ = 0;
         reserved_ = false;
 
         if (outstanding_ == 0) return;
 
-        // Free CQ slots before retrying TX; both reaps share one ring-sized budget.
+        // Free CQ slots before retrying TX; both reclamation passes share one ring-sized budget.
         const std::uint32_t budget = xsk_.completion().capacity();
-        const std::uint32_t reaped = reap_completions(budget);
+        const std::uint32_t reaped = reclaim_completed_frames(budget);
         if (outstanding_ == 0) return;
 
-        if (const auto result = xsk_.kick_tx(); !result) {
+        if (const auto result = xsk_.request_tx_progress(); !result) {
             const int error = result.error();
             if (is_expected_wakeup_retry(error) || error == ENOBUFS) {
-                wakeup_retries_.store(wakeup_retries_.load(std::memory_order_relaxed) + 1,
-                                      std::memory_order_relaxed);
+                retryable_wakeup_errors_.store(
+                    retryable_wakeup_errors_.load(std::memory_order_relaxed) + 1,
+                    std::memory_order_relaxed);
             } else if (first_wakeup_error_.load(std::memory_order_relaxed) == 0) [[unlikely]] {
                 first_wakeup_error_.store(error, std::memory_order_relaxed);
             }
         }
 
         // A failed kick may have made partial progress. Only CQ returns frames.
-        if (reaped < budget) reap_completions(budget - reaped);
+        if (reaped < budget) reclaim_completed_frames(budget - reaped);
     }
 
     // Sole-owner operation: the RX worker must be stopped/joined before control calls this.
     [[nodiscard]] std::uint32_t drain_until(std::chrono::steady_clock::time_point deadline) noexcept {
         do {
-            flush();
+            publish_and_service_tx();
         } while (outstanding_ != 0 && std::chrono::steady_clock::now() < deadline);
         return outstanding_;
     }
 
     struct Stats {
-        std::uint64_t packets_sent = 0;
-        std::uint64_t completions = 0;
-        std::uint64_t drops = 0;
-        std::uint64_t wakeup_retries = 0;
+        std::uint64_t frames_submitted = 0;
+        std::uint64_t frames_reclaimed = 0;
+        std::uint64_t frames_rejected = 0;
+        std::uint64_t retryable_wakeup_errors = 0;
         int first_wakeup_error = 0;
     };
 
     [[nodiscard]] Stats stats() const noexcept {
-        return {.packets_sent = packets_sent_.load(std::memory_order_relaxed),
-                .completions = completions_.load(std::memory_order_relaxed),
-                .drops = drops_.load(std::memory_order_relaxed),
-                .wakeup_retries = wakeup_retries_.load(std::memory_order_relaxed),
+        return {.frames_submitted = frames_submitted_.load(std::memory_order_relaxed),
+                .frames_reclaimed = frames_reclaimed_.load(std::memory_order_relaxed),
+                .frames_rejected = frames_rejected_.load(std::memory_order_relaxed),
+                .retryable_wakeup_errors = retryable_wakeup_errors_.load(std::memory_order_relaxed),
                 .first_wakeup_error = first_wakeup_error_.load(std::memory_order_relaxed)};
     }
 
@@ -145,10 +149,10 @@ private:
     // Published descriptors whose frame ownership has not yet returned through CQ.
     std::uint32_t outstanding_ = 0;
 
-    alignas(CACHE_SIZE) std::atomic<std::uint64_t> packets_sent_{0};
-    std::atomic<std::uint64_t> completions_{0};
-    std::atomic<std::uint64_t> drops_{0};
-    std::atomic<std::uint64_t> wakeup_retries_{0};
+    alignas(CACHE_SIZE) std::atomic<std::uint64_t> frames_submitted_{0};
+    std::atomic<std::uint64_t> frames_reclaimed_{0};
+    std::atomic<std::uint64_t> frames_rejected_{0};
+    std::atomic<std::uint64_t> retryable_wakeup_errors_{0};
     std::atomic<int> first_wakeup_error_{0};
 };
 

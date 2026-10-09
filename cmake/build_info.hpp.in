@@ -1,0 +1,11 @@
+#pragma once
+
+namespace afxdp::build {
+inline constexpr char revision[] = R"afxdp(@SOURCE_REVISION@)afxdp";
+inline constexpr char source_state[] = R"afxdp(@SOURCE_STATE@)afxdp";
+inline constexpr char source_fingerprint[] = "@SOURCE_FINGERPRINT@";
+inline constexpr char compiler[] = R"afxdp(@COMPILER@)afxdp";
+inline constexpr char configuration[] = R"afxdp(@CONFIGURATION@)afxdp";
+inline constexpr char compile_command[] = R"afxdp(@COMPILE_COMMAND@)afxdp";
+inline constexpr char libbpf_version[] = R"afxdp(@LIBBPF_VERSION@)afxdp";
+}
