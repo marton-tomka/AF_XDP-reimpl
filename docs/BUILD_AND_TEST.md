@@ -1,151 +1,98 @@
 # Build & Test
 
-The current reflector contract, output fields, and unprivileged regression commands are documented in [the implementation notes](REPORTING_AND_PACKET_CONTRACT.md).
+The supported build is Linux/x86-64 with GCC 14 or newer, clang's BPF backend, CMake 3.20 or newer, pkg-config, and libbpf development files. The running kernel must support AF_XDP and the busy-poll socket options configured in `main.cpp`.
 
-How to build `afxdp_receiver`, run it, and verify the full path (XDP filter → redirect → userspace callback) end to end, including on a machine with no spare NIC, using a veth pair.
+On Ubuntu, install the build dependencies and tools for the veth smoke test:
 
-## Prerequisites
+```bash
+sudo apt-get install cmake clang gcc-14 g++-14 pkg-config \
+    libbpf-dev libelf-dev zlib1g-dev iproute2 ethtool python3
+```
 
-| Requirement | Why |
+From the repository root:
+
+```bash
+cmake -S . -B build -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 1
+```
+
+This builds `afxdp_receiver` and `xdp_prog.bpf.o`. CMake also generates the build information embedded in the executable. Always run from the directory containing the matching BPF object:
+
+```bash
+cd build
+sudo ./afxdp_receiver -i eth0 -f 192.0.2.10 -q 0
+```
+
+Replace the interface, source IP, and queue with the configured flow. Root is the simplest way to provide the socket, BPF, and memory-locking privileges. Startup raises `RLIMIT_MEMLOCK`; the environment must permit it.
+
+| Option | Meaning |
 |---|---|
-| Linux kernel ≥ 5.11 | `SO_PREFER_BUSY_POLL` / `SO_BUSY_POLL_BUDGET`; busy-polling is enabled unconditionally in `main.cpp` |
-| GCC ≥ 14 | `std::print`, `std::expected` |
-| clang | compiles the XDP program to the `bpf` target |
-| CMake ≥ 3.20, pkg-config | build system |
-| libbpf-dev (+ libelf, zlib) | BPF object loading |
-| iproute2 | the veth test setup below |
+| `-i` | Interface; defaults to `eth0` |
+| `-f` | Required source IPv4 address to capture |
+| `-q` | RX queue; defaults to 0 and must match the flow's queue |
+| `-c` | Worker CPU; otherwise one is selected during startup and pinned |
+| `-r` | Request `SCHED_FIFO` priority 99 for the worker |
+| `--no-hugepages` | Use anonymous UMEM mapping without requesting huge pages |
+| `--no-zerocopy` | Force copy mode |
+
+The startup log reports copy versus zero-copy and native versus generic XDP attachment. Verify these actual modes before comparing runs. Keep the binary and BPF object together; a service should set `WorkingDirectory` to their directory.
+
+For a separate sanitizer build, use `-DCMAKE_BUILD_TYPE=Debug -DAFXDP_SANITIZER=address` with a different build directory. The address option enables ASan and UBSan; the supported thread option enables TSan and UBSan. Use Release without sanitizers for measurements.
+
+The following functional check creates an isolated veth pair. It exercises UDP reflection, not physical-NIC performance. The reflector preserves input checksums, so this lab disables TX checksum offload to supply completed checksums in the packet bytes. See the kernel's [checksum-offload documentation](https://docs.kernel.org/networking/checksum-offloads.html).
 
 ```bash
-sudo apt-get install -y cmake clang gcc-14 g++-14 pkg-config \
-    libbpf-dev libelf-dev zlib1g-dev iproute2
-```
-
-Tested on Ubuntu 24.04 (gcc-14 14.2, clang 18, libbpf 1.3).
-
-## Build
-
-```bash
-cmake -S . -B build
-cmake --build build
-```
-
-This produces two artifacts in `build/`:
-
-- `afxdp_receiver`: the userspace engine (C++23, compiled by your host compiler)
-- `xdp_prog.bpf.o`: the XDP program, built by a separate `clang -target bpf` step. A BPF object is not a host-architecture object; it can't be produced by the normal compiler machinery or linked into the executable, which is why CMake shells out to clang for it.
-
-The binary loads `"xdp_prog.bpf.o"` by a path relative to the **current working directory** — run from `build/`, or keep the two files together wherever you deploy them.
-
-## Runtime requirements
-
-**Privilege.** AF_XDP needs to create the socket, attach a BPF program, and lock UMEM pages. Simplest: run as root. Non-root requires `CAP_BPF`, `CAP_NET_ADMIN`, `CAP_NET_RAW`, `CAP_SYS_RESOURCE` (kernel-version dependent).
-
-**Memlock.** On startup the program raises `RLIMIT_MEMLOCK` itself; the *environment's hard limit* must allow that. If you see `setrlimit(RLIMIT_MEMLOCK): Operation not permitted`, raise the ceiling where the process runs:
-
-| Environment | Fix |
-|---|---|
-| Docker | `--ulimit memlock=-1` |
-| Bare metal / VM | `/etc/security/limits.conf`: `* hard memlock unlimited` |
-| systemd service | `LimitMEMLOCK=infinity` |
-
-**Busy-poll sysfs knobs.** `SO_PREFER_BUSY_POLL` only keeps interrupts parked if the interface defers them; without these two settings the feature largely degrades to ordinary IRQ-driven NAPI:
-
-```bash
-echo 2      | sudo tee /sys/class/net/<iface>/napi_defer_hard_irqs
-echo 200000 | sudo tee /sys/class/net/<iface>/gro_flush_timeout
-```
-
-## Quick functional test (veth, no hardware needed)
-
-An isolated network namespace on one end of a veth pair, the receiver on the other. XDP attaches to veth in generic (SKB) mode — the loader falls back to it automatically after native mode fails, which is expected on virtual interfaces.
-
-```bash
-# topology: veth0 (host) <-> veth1 (namespace "xdptest")
 sudo ip netns add xdptest
 sudo ip link add veth0 type veth peer name veth1
 sudo ip link set veth1 netns xdptest
-
 sudo ip addr add 10.10.0.1/24 dev veth0
-sudo ip link set veth0 up
 sudo ip netns exec xdptest ip addr add 10.10.0.2/24 dev veth1
+sudo ethtool -K veth0 tx off
+sudo ip netns exec xdptest ethtool -K veth1 tx off
+sudo ip link set veth0 up
 sudo ip netns exec xdptest ip link set veth1 up
 sudo ip netns exec xdptest ip link set lo up
-
-# receiver on the host end, filtering on the namespace's source IP
-cd build
-sudo ./afxdp_receiver -i veth0 -f 10.10.0.2
-
-# traffic from the namespace (second shell)
-sudo ip netns exec xdptest ping 10.10.0.1
 ```
 
-**What success looks like:** the once-a-second stats line shows `rx` and `bench_pkts` climbing.
-
-Two expected oddities, neither a failure:
-
-- `ping` itself may report 100% loss. The bundled callback echoes the raw frame back unmodified; that is not a well-formed ICMP reply, so `ping` won't count it. To see the reflected frames: `sudo ip netns exec xdptest tcpdump -i veth1` (tcpdump is promiscuous by default and shows them regardless of destination MAC).
-- The loader logs `DRV mode failed … falling back to SKB mode` — normal on veth.
-
-Teardown (deleting one end of a veth pair removes both):
+Start the receiver from `build/`:
 
 ```bash
-sudo ip netns del xdptest && sudo ip link del veth0
+sudo ./afxdp_receiver -i veth0 -f 10.10.0.2 --no-zerocopy --no-hugepages
 ```
 
-## Real NIC
+Once it reports `Running`, send a UDP probe from a second terminal:
 
-- **Queue selection.** `-q` must be the queue your target flow actually lands on. Check queue count with `ethtool -l <iface>`; either reduce to one queue (`ethtool -L <iface> combined 1`) or steer the flow explicitly (`ethtool -N` n-tuple rules). Wrong queue = silence, not an error.
-- **Zero-copy.** Needs driver support (`i40e`, `ice`, `mlx5`, `igc`, and others on recent kernels — verify for your kernel). The socket tries `XDP_ZEROCOPY` first and falls back to copy mode automatically; the log line (`ZEROCOPY` / `COPY`) tells you which you got, and the two are not comparable in benchmarks.
-- **Pinning.** `-c <core>` pins the poll thread; pick an isolated core for measurement. `-r` requests `SCHED_FIFO` — read up on RT throttling (`sched_rt_runtime_us`) before using it on a non-isolated core.
+```bash
+sudo ip netns exec xdptest python3 - <<'PY'
+import socket
 
-## What the built-in benchmark reports
+payload = b"afxdp reflection check"
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+    sock.settimeout(2)
+    sock.sendto(payload, ("10.10.0.1", 9000))
+    reply, peer = sock.recvfrom(2048)
+    assert reply == payload and peer == ("10.10.0.1", 9000), (reply, peer)
+    print("UDP reflection passed")
+PY
+```
 
-The bundled callback is a reflector: it counts every matched frame and echoes it back out the TX ring.
+A valid reply confirms the round trip. `rx_frames_processed`, `tx_frames_submitted`, and `tx_frames_reclaimed` should increase. No UDP server is needed on port 9000: the AF_XDP callback reflects the packet. ICMP `ping` does not test this UDP-only callback. A probe sent during the one-second warmup may produce no latency samples.
 
-| Field | Meaning |
+Stop the receiver with Ctrl+C before deleting the namespace; deleting its veth endpoint removes the pair:
+
+```bash
+sudo ip netns del xdptest
+```
+
+Common setup failures:
+
+| Symptom | Check |
 |---|---|
-| `rx` | frames delivered to userspace by the RX ring |
-| `fill_refills` | Fill-ring top-up passes (buffer supply to the driver) |
-| `tx` / `tx_drops` | frames sent / send attempts dropped (ring full, allocator empty, oversized) |
-| `bench_pkts` / `bench_bytes` | matched traffic seen by the callback |
-| `bench_echoed` | frames successfully reflected |
-| `Δt` | actual wall time of the reporting window |
+| `setrlimit(RLIMIT_MEMLOCK)` fails | Process/container memory-locking permissions and limits |
+| Busy-poll `setsockopt` fails | The reported errno, kernel support, and required privileges |
+| AF_XDP bind fails | Interface, queue, driver support, and another socket bound to the queue |
+| BPF object cannot be opened or expected maps are missing | Working directory and whether the object matches the executable |
+| No RX processing | Source-IP filter, interface, and queue steering |
+| RX increases but no UDP reply | `unsupported_frames`, TX rejection/error counters, and the packet contract in the README |
 
-Two validity caveats, stated so the numbers aren't over-read:
-
-1. Each stats counter is read and written atomically, but the counters in one report can reflect different instants; a report is not a coherent point-in-time snapshot.
-2. veth numbers exercise the software path only. Latency/throughput claims belong on a physical NIC.
-
-## Running as a service
-
-```ini
-# /etc/systemd/system/afxdp-receiver.service
-[Unit]
-Description=AF_XDP receiver
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/afxdp
-ExecStart=/opt/afxdp/afxdp_receiver -i eth0 -f 203.0.113.10 -q 0
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_BPF CAP_SYS_RESOURCE CAP_IPC_LOCK
-LimitMEMLOCK=infinity
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-`WorkingDirectory` matters for the same reason as in Build: the relative `xdp_prog.bpf.o` path resolves against it — ship both files to `/opt/afxdp` together. On kernels where the capability set proves insufficient, fall back to running as root.
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `setrlimit(RLIMIT_MEMLOCK): Operation not permitted` | environment caps the hard memlock limit | table in Runtime requirements |
-| `setsockopt(SO_PREFER_BUSY_POLL/…)` fails | kernel < 5.11 | upgrade, or remove the hardcoded `busy_poll = true` in `main.cpp` and rebuild |
-| `bind(AF_XDP, XDP_COPY)` fails | queue index doesn't exist, or already bound | check `-q` against `ethtool -l`; check for another bound socket |
-| `DRV mode failed … falling back to SKB` | no native XDP support on the interface | expected on veth; on real NICs check driver support |
-| `xsks_map` / `target_ip_map` not found | stale `xdp_prog.bpf.o` next to the binary | rebuild; keep binary and object in sync |
-| runs, but `rx` stays 0 | filter mismatch or wrong queue | `-f` filters on **source** IP; verify the flow's queue (RSS) with `ethtool -l` / n-tuple steering; `ip link show <iface>` should list the attached prog |
+For a physical NIC, configure RSS or explicit steering so the flow reaches `-q`. Driver/kernel support determines available operating modes; busy polling alone does not establish IRQ suppression. The [benchmark guide](BENCHMARKING.md) describes the recorded outputs and their limits.

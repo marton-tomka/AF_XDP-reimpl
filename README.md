@@ -1,12 +1,14 @@
 # afxdp_receiver
 
-Kernel-bypass packet I/O on Linux: an AF_XDP receive/transmit engine in C++23, with an eBPF/XDP program steering selected traffic from the NIC directly into userspace memory, possibly removing context switches, a copy, and a ton of latency.
+An AF_XDP receive/transmit engine in C++23 for a controlled Linux/x86-64 environment, with an eBPF source-IP filter and a UDP reflector benchmark.
 
-The point of the project is the latency toolbox: kernel bypass, zero-copy DMA buffers, lock-free SPSC rings, busy-polling instead of interrupts, huge pages, CPU pinning, and no heap allocation on the hot path.
+One worker owns the rings and frame allocator. The design uses preallocated UMEM, SPSC rings, CPU pinning, bounded I/O maintenance, and no heap allocation on the hot path. Zero-copy and huge pages are requested by default, with fallbacks.
 
 ## Packet path
 
 ![Packet path: kernel UDP socket path versus this project's AF_XDP path](docs/packet-path.svg)
+
+The diagram illustrates the native zero-copy receive path. Runtime wakeup syscalls and IRQ behavior depend on configuration; reflected frames return to the allocator through TX completion before reuse.
 
 Non-matching traffic never leaves the normal kernel path, so the machine stays reachable (SSH, etc.) while the engine owns its target flow.
 
@@ -15,21 +17,21 @@ Non-matching traffic never leaves the normal kernel path, so the machine stays r
 | Piece | File | The interesting bit |
 |---|---|---|
 | XDP filter | `xdp_prog_bpf.c` | In-kernel classification: Ethernet → up to two stacked VLAN tags (802.1Q/802.1ad) → IPv4 source match. Hits are redirected to the AF_XDP socket; everything else `XDP_PASS`es. The filter IP lives in a BPF array map, so it's swappable at runtime without reattaching the program. |
-| UMEM | `umem.hpp` | One mmap'd 16 MB region (8192 × 2048 B frames), 2 MB huge pages with automatic 4 KB fallback, mlocked. |
-| Rings | `ring.hpp` | One template over all four AF_XDP rings (RX/TX/Fill/Completion). `std::atomic_ref` with acquire/release ordering on the kernel-shared head/tail words; producer/consumer indices are cached locally and re-read from shared memory only when the cached view runs dry. |
+| UMEM | `umem.hpp` | One mmap'd 16 MiB region (8192 × 2048 B frames), huge-page allocation with anonymous-mapping fallback, mlocked. |
+| Rings | `ring.hpp` | Four SPSC rings with cached indices, readable/writable windows, and acquire/release publication through `std::atomic_ref`. |
 | Frame allocator | `frame_alloc.hpp` | Fixed-capacity LIFO stack of UMEM frame offsets, O(1) alloc/free, zero heap after startup. |
 | Socket setup | `xsk.hpp` | `XDP_ZEROCOPY` bind with automatic copy-mode fallback; NAPI busy-polling via `SO_PREFER_BUSY_POLL` (budget 64, 20µs timeout (hardcoded)). |
 | BPF loader | `xdp_loader.hpp` | libbpf attach - native (driver) mode first, generic (SKB) fallback. |
 | Receiver | `receiver.hpp` | Pinned, optionally `SCHED_FIFO` polling thread; 64-frame batches; hands each frame to a user callback as a raw byte span; refills the Fill ring past a threshold. |
-| Transmitter | `transmitter.hpp` | TX ring producer plus completion reaping; frames return to the allocator. |
+| Transmitter | `transmitter.hpp` | Stages and publishes RX frames in place; retries outstanding TX and reclaims frames through CQ. |
 
-Error handling is `std::expected` end to end; there are no exceptions.
+I/O setup and progress errors use `std::expected`; allocation and cold-path formatting can throw.
 
 ## Current scope
 
-Single RX queue, single socket, IPv4-only filtering. The receive callback gets raw Ethernet frames. The bundled reflector expects known unicast peers, untagged IPv4/UDP, a 20-byte IPv4 header, no fragmentation, and an IPv4 MTU of 1500. Unsupported layouts are counted and recycled. The XDP source-IP filter is broader than this callback's packet contract.
+Single RX queue, single socket, IPv4-only filtering. The receive callback gets raw Ethernet frames. The bundled reflector expects known unicast peers, valid input checksums, untagged IPv4/UDP, a 20-byte IPv4 header, no fragmentation, and an IPv4 MTU of 1500. It swaps endpoints while preserving checksums. Unsupported layouts are counted and recycled. The XDP source-IP filter is broader than this callback's packet contract.
 
-Reports distinguish RX processing, TX staging, TX publication, CQ reclamation, and rejected frames. Kernel socket statistics are queried on the control thread. After shutdown, `callback_tx_staging_ns.csv` contains the sorted callback/staging sample distribution and `run_metadata.txt` retains build settings, actual operating modes, counters, and outcome. These measurements do not establish wire delivery or end-to-end latency. The [implementation notes](docs/REPORTING_AND_PACKET_CONTRACT.md) explain the contract, counter meanings, renamed methods, assembly, and regressions.
+Reports distinguish RX processing, TX staging, TX publication, CQ reclamation, and rejected frames. After shutdown, `callback_tx_staging_ns.csv` contains sorted callback/staging samples and `run_metadata.txt` retains build settings, operating modes, counters, and outcome. See [Benchmarking](docs/BENCHMARKING.md) for counter meanings and measurement limits.
 
 ## Performance
 
@@ -38,11 +40,13 @@ Not yet measured in a proper test environment; functionality confirmed via veth 
 ## Build & run
 
 ```bash
-cmake -S . -B build && cmake --build build
-sudo ./build/afxdp_receiver -i <iface> -f <source_ip_to_capture>
+cmake -S . -B build -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 1
+cd build
+sudo ./afxdp_receiver -i eth0 -f 192.0.2.10
 ```
 
-Needs Linux ≥ 5.11 (≥ 5.14 for zero-copy on Intel igc / I225/I226), GCC ≥ 14, clang, CMake ≥ 3.20, libbpf-dev. Full walkthrough (including the veth-based test setup that needs no physical NIC) in [`BUILD_AND_TEST.md`](docs/BUILD_AND_TEST.md).
+Replace the interface and source IP with your flow. Run from the directory containing `xdp_prog.bpf.o`. Requires Linux/x86-64 with AF_XDP and busy-poll socket options, GCC ≥ 14, clang with a BPF backend, CMake ≥ 3.20, pkg-config, and libbpf development files. Build and UDP smoke-test instructions are in [Build & Test](docs/BUILD_AND_TEST.md).
 
 ## License
 
